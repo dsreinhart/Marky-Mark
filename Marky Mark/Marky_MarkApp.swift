@@ -85,12 +85,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             guard let fileURL = url else { continue }
 
-            if let openAction = DocumentState.shared.openFileAction {
-                // App is running — load in existing window.
+            // Always store as pending so a new window can pick it up if needed.
+            DocumentState.shared.pendingFileURL = fileURL
+
+            // If there's a visible window, also load directly into it.
+            let hasVisibleWindow = NSApp.windows.contains { $0.isVisible && $0.canBecomeMain }
+            if hasVisibleWindow, let openAction = DocumentState.shared.openFileAction {
                 openAction(fileURL)
+                DocumentState.shared.pendingFileURL = nil
+            }
+        }
+
+        // Bring the app and its window to the foreground.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+
+            if let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+                window.makeKeyAndOrderFront(nil)
             } else {
-                // App is launching — store for ContentView to pick up.
-                DocumentState.shared.pendingFileURL = fileURL
+                // No visible window (it was closed). Reopen the app to trigger
+                // SwiftUI to create a new window. The file will be loaded from
+                // pendingFileURL in the new window's onAppear.
+                NSWorkspace.shared.open(URL(fileURLWithPath: Bundle.main.bundlePath))
             }
         }
     }

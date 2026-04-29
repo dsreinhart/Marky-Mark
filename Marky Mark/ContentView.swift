@@ -101,6 +101,10 @@ struct ContentView: View {
             DocumentState.shared.saveAction = { [self] in saveDocument() }
             DocumentState.shared.openFileAction = { [self] url in openFileFromFinder(url) }
         }
+        .onDisappear {
+            DocumentState.shared.openFileAction = nil
+            DocumentState.shared.saveAction = nil
+        }
         .navigationTitle(windowTitle)
         .focusedValue(\.documentActions, DocumentActions(
             newDocument: newDocument,
