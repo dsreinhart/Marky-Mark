@@ -14,64 +14,99 @@ struct ContentView: View {
     @State private var scrollFraction: CGFloat = 0
     @State private var parsedBlocks: [MarkdownBlock] = []
     @State private var showCheatSheet = false
+    @State private var showEditor = true
+    @State private var showPreview = true
     @State private var currentFileURL: URL? = nil
     @State private var hasUnsavedChanges = false
     @State private var fileBookmarkData: Data? = nil
     private static let bookmarkKey = "lastOpenedFileBookmark"
 
-    var body: some View {
-        HSplitView {
-            // MARK: Editor pane
-            VStack(spacing: 0) {
-                HStack {
-                    Image(systemName: "pencil.and.outline")
-                        .foregroundStyle(.secondary)
-                    Text("Markdown")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(markdownText.count) chars")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.bar)
-
-                Divider()
-
-                MarkdownEditorView(text: $markdownText, scrollFraction: $scrollFraction)
+    private var editorPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "pencil.and.outline")
+                    .foregroundStyle(.secondary)
+                Text("Markdown")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(markdownText.count) chars")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
             }
-            .frame(minWidth: 300)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
 
-            // MARK: Preview pane
-            VStack(spacing: 0) {
-                HStack {
-                    Image(systemName: "eye")
-                        .foregroundStyle(.secondary)
-                    Text("Preview")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(parsedBlocks.count) blocks")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.bar)
+            Divider()
 
-                Divider()
-
-                MarkdownPreviewView(blocks: parsedBlocks, scrollFraction: $scrollFraction)
-            }
-            .frame(minWidth: 300)
+            MarkdownEditorView(text: $markdownText, scrollFraction: $scrollFraction)
         }
-        .frame(minWidth: 700, minHeight: 400)
+    }
+
+    private var previewPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "eye")
+                    .foregroundStyle(.secondary)
+                Text("Preview")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(parsedBlocks.count) blocks")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
+
+            Divider()
+
+            MarkdownPreviewView(blocks: parsedBlocks, scrollFraction: $scrollFraction)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if showEditor && showPreview {
+                HSplitView {
+                    editorPane.frame(minWidth: 300)
+                    previewPane.frame(minWidth: 300)
+                }
+            } else if showEditor {
+                editorPane
+            } else {
+                previewPane
+            }
+        }
+        .frame(minWidth: showEditor && showPreview ? 700 : 350, minHeight: 400)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    if showEditor && !showPreview {
+                        showPreview = true
+                    } else {
+                        showEditor.toggle()
+                    }
+                } label: {
+                    Label("Editor", systemImage: showEditor ? "pencil.and.outline" : "pencil.slash")
+                }
+                .help(showEditor ? "Hide Editor" : "Show Editor")
+
+                Button {
+                    if !showEditor && showPreview {
+                        showEditor = true
+                    } else {
+                        showPreview.toggle()
+                    }
+                } label: {
+                    Label("Preview", systemImage: showPreview ? "eye" : "eye.slash")
+                }
+                .help(showPreview ? "Hide Preview" : "Show Preview")
+
                 Button {
                     showCheatSheet.toggle()
                 } label: {
