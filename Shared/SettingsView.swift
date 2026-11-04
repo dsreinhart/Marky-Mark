@@ -12,6 +12,11 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
+            editorTab
+                .tabItem {
+                    Label("Editor", systemImage: "text.alignleft")
+                }
+
             colorsTab
                 .tabItem {
                     Label("Colors", systemImage: "paintpalette")
@@ -22,7 +27,7 @@ struct SettingsView: View {
                     Label("Typography", systemImage: "textformat.size")
                 }
         }
-        .frame(width: 460, height: 480)
+        .frame(width: 480, height: 520)
     }
 
     private var previewParagraph: AttributedString {
@@ -35,6 +40,78 @@ struct SettingsView: View {
         link.foregroundColor = theme.linkColor
         result.append(link)
         return result
+    }
+
+    // MARK: - Editor Tab
+
+    #if os(macOS)
+    private static let layoutHint = "Typewriter scrolling, focus mode and composition mode live in the View menu."
+    #else
+    private static let layoutHint = "Typewriter scrolling is in the document's ••• menu."
+    #endif
+
+    private var editorTab: some View {
+        Form {
+            Section("Theme") {
+                HStack(spacing: 8) {
+                    ForEach(ThemeSettings.presets) { preset in
+                        Button {
+                            theme.apply(preset)
+                        } label: {
+                            VStack(spacing: 4) {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(preset.background ?? Color(platform: .mmBackground))
+                                    .overlay(
+                                        Text("Aa")
+                                            .font(.system(size: 15, weight: .semibold, design: preset.font == "serif" ? .serif : (preset.font == "monospaced" ? .monospaced : .default)))
+                                            .foregroundStyle(preset.text ?? Color.primary)
+                                    )
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(platform: .mmSeparator), lineWidth: 0.5))
+                                    .frame(width: 56, height: 40)
+                                Text(preset.name).font(.caption2)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+                Toggle("Use custom editor colors", isOn: $theme.useCustomEditorColors)
+                if theme.useCustomEditorColors {
+                    ColorPicker("Editor background", selection: $theme.editorBackground)
+                    ColorPicker("Editor text", selection: $theme.editorTextColor)
+                }
+            }
+
+            Section("Font") {
+                Picker("Editor font", selection: $theme.editorFont) {
+                    ForEach(ThemeSettings.fontChoices, id: \.id) { choice in
+                        Text(choice.name).tag(choice.id)
+                    }
+                }
+                HStack {
+                    Text("Line spacing: \(Int(theme.lineSpacing)) pt")
+                    Spacer()
+                    Slider(value: $theme.lineSpacing, in: 0...14, step: 1)
+                        .frame(width: 180)
+                }
+            }
+
+            Section("Layout") {
+                Picker("Editor width", selection: Binding(
+                    get: { Int(theme.editorMaxWidth) },
+                    set: { theme.editorMaxWidth = Double($0) })) {
+                    Text("Narrow (600 pt)").tag(600)
+                    Text("Comfortable (760 pt)").tag(760)
+                    Text("Wide (960 pt)").tag(960)
+                    Text("Full window").tag(0)
+                }
+                Text(Self.layoutHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: - Colors Tab

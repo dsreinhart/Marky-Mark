@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import SwiftUI
 
 // MARK: - Block types produced by the parser
 
@@ -20,6 +19,8 @@ enum MarkdownBlock: Identifiable {
     case blockquote(text: String)
     case horizontalRule
     case table(headers: [String], rows: [[String]])
+    case comment(text: String)
+    case frontMatter(text: String)
     case blank
 
     var id: String {
@@ -33,6 +34,8 @@ enum MarkdownBlock: Identifiable {
         case .blockquote(let text): return "bq-\(text.prefix(40))"
         case .horizontalRule: return "hr-\(UUID().uuidString)"
         case .table(let headers, _): return "table-\(headers.joined(separator: "-"))"
+        case .comment(let text): return "comment-\(text.prefix(40))"
+        case .frontMatter(let text): return "frontmatter-\(text.prefix(40))"
         case .blank: return "blank-\(UUID().uuidString)"
         }
     }
@@ -47,9 +50,41 @@ struct MarkdownParser {
         var blocks: [MarkdownBlock] = []
         var i = 0
 
+        // YAML front matter: a `---` fence on the very first line closed by another `---`.
+        if let first = lines.first, first.trimmingCharacters(in: .whitespaces) == "---" {
+            if let close = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
+                blocks.append(.frontMatter(text: lines[1..<close].joined(separator: "\n")))
+                i = close + 1
+            }
+        }
+
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // HTML comment block (single or multi-line)
+            if trimmed.hasPrefix("<!--") {
+                var commentLines: [String] = []
+                var finished = false
+                while i < lines.count {
+                    var piece = lines[i]
+                    if commentLines.isEmpty, let open = piece.range(of: "<!--") {
+                        piece = String(piece[open.upperBound...])
+                    }
+                    if let close = piece.range(of: "-->") {
+                        piece = String(piece[..<close.lowerBound])
+                        finished = true
+                    }
+                    let cleaned = piece.trimmingCharacters(in: .whitespaces)
+                    if !(cleaned.isEmpty && (commentLines.isEmpty || finished)) || (!finished && !commentLines.isEmpty) {
+                        commentLines.append(cleaned)
+                    }
+                    i += 1
+                    if finished { break }
+                }
+                blocks.append(.comment(text: commentLines.joined(separator: "\n")))
+                continue
+            }
 
             // Fenced code block
             if trimmed.hasPrefix("```") {
@@ -173,6 +208,7 @@ struct MarkdownParser {
                 let nextTrimmed = next.trimmingCharacters(in: .whitespaces)
                 if nextTrimmed.isEmpty
                     || nextTrimmed.hasPrefix("#")
+                    || nextTrimmed.hasPrefix("<!--")
                     || nextTrimmed.hasPrefix("```")
                     || nextTrimmed.hasPrefix(">")
                     || nextTrimmed.range(of: #"^[-*_]{3,}$"#, options: .regularExpression) != nil
@@ -200,90 +236,5 @@ struct MarkdownParser {
         if content.hasPrefix("|") { content = String(content.dropFirst()) }
         if content.hasSuffix("|") { content = String(content.dropLast()) }
         return content.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-    }
-
-    // MARK: - Inline styling (bold, italic, inline code, strikethrough, links, images)
-
-    static func styledText(_ text: String, theme: ThemeSettings = .shared) -> AttributedString {
-        var result = AttributedString()
-        let bodyFont = Font.system(size: theme.bodyFontSize)
-        let pattern = /(!?\[[^\]]*\]\([^)]+\))|(~~)(.+?)(~~)|(`[^`]+`)|(\*\*\*|___)(.+?)(\*\*\*|___)|(\*\*|__)(.+?)(\*\*|__)|(\*|_)(.+?)(\*|_)/
-        var remaining = text[...]
-
-        while !remaining.isEmpty {
-            if let match = remaining.firstMatch(of: pattern) {
-                // Add plain text before the match
-                let before = remaining[remaining.startIndex..<match.range.lowerBound]
-                if !before.isEmpty {
-                    result.append(AttributedString(String(before)))
-                }
-
-                if let linkOrImage = match.1 {
-                    // Link or Image: [text](url) or ![alt](url)
-                    let s = String(linkOrImage)
-                    if s.hasPrefix("!") {
-                        // Image: ![alt](url)
-                        if let imgMatch = s.firstMatch(of: /!\[([^\]]*)\]\(([^)]+)\)/) {
-                            let alt = String(imgMatch.1)
-                            let url = String(imgMatch.2)
-                            var attr = AttributedString(alt.isEmpty ? url : "\u{1F5BC} \(alt)")
-                            attr.foregroundColor = theme.linkColor
-                            attr.underlineStyle = .single
-                            if let linkURL = URL(string: url) {
-                                attr.link = linkURL
-                            }
-                            result.append(attr)
-                        }
-                    } else {
-                        // Link: [text](url)
-                        if let linkMatch = s.firstMatch(of: /\[([^\]]*)\]\(([^)]+)\)/) {
-                            let label = String(linkMatch.1)
-                            let url = String(linkMatch.2)
-                            var attr = AttributedString(label)
-                            attr.foregroundColor = theme.linkColor
-                            attr.underlineStyle = .single
-                            if let linkURL = URL(string: url) {
-                                attr.link = linkURL
-                            }
-                            result.append(attr)
-                        }
-                    }
-                } else if match.2 != nil, let inner = match.3 {
-                    // Strikethrough ~~text~~
-                    var attr = AttributedString(String(inner))
-                    attr.strikethroughStyle = .single
-                    attr.foregroundColor = theme.strikethroughColor
-                    result.append(attr)
-                } else if let code = match.5 {
-                    // Inline code
-                    var attr = AttributedString(String(code.dropFirst().dropLast()))
-                    attr.font = .system(size: theme.bodyFontSize, design: .monospaced)
-                    attr.backgroundColor = theme.inlineCodeBackground.opacity(0.5)
-                    result.append(attr)
-                } else if match.6 != nil, let inner = match.7 {
-                    // Bold + Italic
-                    var attr = AttributedString(String(inner))
-                    attr.font = bodyFont.bold().italic()
-                    result.append(attr)
-                } else if match.9 != nil, let inner = match.10 {
-                    // Bold
-                    var attr = AttributedString(String(inner))
-                    attr.font = bodyFont.bold()
-                    result.append(attr)
-                } else if match.12 != nil, let inner = match.13 {
-                    // Italic
-                    var attr = AttributedString(String(inner))
-                    attr.font = bodyFont.italic()
-                    result.append(attr)
-                }
-
-                remaining = remaining[match.range.upperBound...]
-            } else {
-                result.append(AttributedString(String(remaining)))
-                break
-            }
-        }
-
-        return result
     }
 }

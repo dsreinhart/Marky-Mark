@@ -6,378 +6,265 @@
 //
 
 import SwiftUI
+import Combine
 import UniformTypeIdentifiers
 
-struct ContentView: View {
-    @State private var markdownText: String = ""
-    @State private var lastSavedText: String = ""
-    @State private var scrollFraction: CGFloat = 0
-    @State private var parsedBlocks: [MarkdownBlock] = []
-    @State private var showCheatSheet = false
-    @State private var showEditor = true
-    @State private var showPreview = true
-    @State private var currentFileURL: URL? = nil
-    @State private var hasUnsavedChanges = false
-    @State private var fileBookmarkData: Data? = nil
-    private static let bookmarkKey = "lastOpenedFileBookmark"
+/// Which face of the single editor pane is showing.
+enum EditorMode: String, CaseIterable, Identifiable {
+    case rendered
+    case raw
 
-    private var editorPane: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "pencil.and.outline")
-                    .foregroundStyle(.secondary)
-                Text("Markdown")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(markdownText.count) chars")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.bar)
+    var id: String { rawValue }
+}
 
-            Divider()
-
-            MarkdownEditorView(text: $markdownText, scrollFraction: $scrollFraction)
-        }
-    }
-
-    private var previewPane: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "eye")
-                    .foregroundStyle(.secondary)
-                Text("Preview")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(parsedBlocks.count) blocks")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.bar)
-
-            Divider()
-
-            MarkdownPreviewView(blocks: parsedBlocks, scrollFraction: $scrollFraction)
-        }
-    }
+/// Hosts one document per window (tab). Resolves which document the window shows and
+/// registers the window with the store.
+struct DocumentWindowView: View {
+    @Binding var documentID: UUID?
+    @Environment(\.openWindow) private var openWindow
+    @State private var document: Document? = nil
+    @State private var window: NSWindow? = nil
 
     var body: some View {
         Group {
-            if showEditor && showPreview {
-                HSplitView {
-                    editorPane.frame(minWidth: 300)
-                    previewPane.frame(minWidth: 300)
-                }
-            } else if showEditor {
-                editorPane
+            if let document {
+                ContentView(document: document)
             } else {
-                previewPane
+                Color.clear
             }
         }
-        .frame(minWidth: showEditor && showPreview ? 700 : 350, minHeight: 400)
+        .background(WindowAccessor { window = $0 })
+        .onAppear(perform: resolve)
+        .onChange(of: window) { _, _ in register() }
+        .onChange(of: document?.id) { _, _ in register() }
+    }
+
+    private func resolve() {
+        let store = DocumentStore.shared
+        store.openWindowAction = { [openWindow] id in openWindow(value: id) }
+        if let id = documentID, let existing = store.document(id: id) {
+            document = existing
+            register()
+            return
+        }
+        let documents = store.initialDocuments()
+        document = documents[0]
+        documentID = documents[0].id
+        register()
+        if documents.count > 1 {
+            Task {
+                try? await Task.sleep(for: .milliseconds(200))
+                for other in documents.dropFirst() {
+                    openWindow(value: other.id)
+                }
+            }
+        }
+    }
+
+    private func register() {
+        guard let window, let document else { return }
+        DocumentStore.shared.register(window: window, for: document)
+    }
+}
+
+/// Per-window UI state that menu commands need to reach.
+@MainActor
+@Observable
+final class WindowUIState {
+    var isComposing = false
+    var showQuickOpen = false
+    var showExportPreview = false
+    weak var window: NSWindow? = nil
+
+    /// Composition mode: full screen, bars hidden, just the text.
+    func toggleComposition() {
+        isComposing.toggle()
+        guard let window else { return }
+        let isFullScreen = window.styleMask.contains(.fullScreen)
+        if isComposing != isFullScreen {
+            window.toggleFullScreen(nil)
+        }
+    }
+}
+
+struct ContentView: View {
+    @Bindable var document: Document
+    @State private var showCheatSheet = false
+    @State private var controller = RichEditorController()
+    @State private var uiState = WindowUIState()
+    @AppStorage("editorMode") private var editorMode: EditorMode = .rendered
+    private var theme = ThemeSettings.shared
+    private var viewSettings = ViewSettings.shared
+
+    init(document: Document) {
+        self.document = document
+    }
+
+    private var editorStyle: EditorStyle { EditorStyle(theme: theme) }
+
+    private var editorOptions: EditorOptions {
+        var options = EditorOptions()
+        options.typewriter = viewSettings.typewriterScrolling
+        options.focus = viewSettings.focusMode
+        options.maxWidth = CGFloat(theme.editorMaxWidth)
+        options.composition = uiState.isComposing
+        if uiState.isComposing && options.maxWidth == 0 { options.maxWidth = 720 }
+        return options
+    }
+
+    private var editorColumn: some View {
+        VStack(spacing: 0) {
+            if editorMode == .rendered {
+                if !uiState.isComposing {
+                    FormattingToolbar(controller: controller, documentURL: document.fileURL)
+                    Divider()
+                }
+                RichMarkdownEditorView(
+                    text: $document.text,
+                    style: editorStyle,
+                    options: editorOptions,
+                    baseURL: document.fileURL,
+                    controller: controller
+                )
+            } else {
+                MarkdownEditorView(text: $document.text, style: editorStyle, options: editorOptions, controller: controller)
+            }
+
+            if !uiState.isComposing {
+                Divider()
+                statusBar
+            }
+        }
+        .frame(minWidth: 460)
+        .layoutPriority(1)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if viewSettings.showLibrary && !uiState.isComposing {
+                LibraryView(currentFileURL: document.fileURL)
+                    .frame(width: 250)
+                Divider()
+            }
+            editorColumn
+            if viewSettings.showDashboard && !uiState.isComposing {
+                Divider()
+                DashboardView(text: $document.text, goalKey: document.goalKey, fileURL: document.fileURL,
+                              onJumpToHeading: { controller.jumpToHeading?($0) })
+                    .frame(width: 270)
+            }
+        }
+        .sheet(isPresented: $uiState.showQuickOpen) { QuickOpenView() }
+        .sheet(isPresented: $uiState.showExportPreview) { ExportPreviewView(document: document) }
+        .background(WindowAccessor { uiState.window = $0 })
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+            if let window = note.object as? NSWindow, window === uiState.window, uiState.isComposing {
+                uiState.isComposing = false
+            }
+        }
+        .toolbar(uiState.isComposing ? .hidden : .visible, for: .windowToolbar)
+        .frame(minWidth: 460 + (viewSettings.showLibrary && !uiState.isComposing ? 251 : 0)
+                         + (viewSettings.showDashboard && !uiState.isComposing ? 271 : 0),
+               minHeight: 400)
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    viewSettings.showLibrary.toggle()
+                } label: {
+                    Label("Library", systemImage: "sidebar.left")
+                }
+                .help(viewSettings.showLibrary ? "Hide Library (⌘⌥L)" : "Show Library (⌘⌥L)")
+            }
+
+            ToolbarItem(placement: .principal) {
+                Picker("Mode", selection: $editorMode) {
+                    Label("Rendered", systemImage: "doc.richtext").tag(EditorMode.rendered)
+                    Label("Raw", systemImage: "chevron.left.forwardslash.chevron.right").tag(EditorMode.raw)
+                }
+                .pickerStyle(.segmented)
+                .help("Switch between the rendered editor and raw Markdown")
+            }
+
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    if showEditor && !showPreview {
-                        showPreview = true
-                    } else {
-                        showEditor.toggle()
-                    }
-                } label: {
-                    Label("Editor", systemImage: showEditor ? "pencil.and.outline" : "pencil.slash")
-                }
-                .help(showEditor ? "Hide Editor" : "Show Editor")
-
-                Button {
-                    if !showEditor && showPreview {
-                        showEditor = true
-                    } else {
-                        showPreview.toggle()
-                    }
-                } label: {
-                    Label("Preview", systemImage: showPreview ? "eye" : "eye.slash")
-                }
-                .help(showPreview ? "Hide Preview" : "Show Preview")
-
                 Button {
                     showCheatSheet.toggle()
                 } label: {
                     Label("Cheat Sheet", systemImage: "list.bullet.rectangle")
                 }
                 .help("Markdown Cheat Sheet")
+
+                Button {
+                    viewSettings.showDashboard.toggle()
+                } label: {
+                    Label("Dashboard", systemImage: "sidebar.right")
+                }
+                .help(viewSettings.showDashboard ? "Hide Dashboard (⌘⌥D)" : "Show Dashboard (⌘⌥D)")
             }
         }
         .sheet(isPresented: $showCheatSheet) {
             MarkdownCheatSheet()
         }
-        .onChange(of: markdownText) { _, newValue in
-            parsedBlocks = MarkdownParser.parse(newValue)
-            markUnsavedChanges(newValue != lastSavedText)
+        .onChange(of: document.text) { _, _ in
+            document.textDidChange()
         }
-        .onAppear {
-            // Check if the app was launched via "Open With..." before restoring the last file.
-            if let pending = DocumentState.shared.pendingFileURL {
-                DocumentState.shared.pendingFileURL = nil
-                loadFileDirectly(from: pending)
-            } else {
-                restoreLastFile()
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            document.autosaveNow()
+        }
+        .navigationTitle(document.windowTitle)
+        .focusedSceneValue(\.richEditorController, controller)
+        .focusedSceneValue(\.document, document)
+        .focusedSceneValue(\.windowUIState, uiState)
+    }
+
+    // MARK: - Status bar
+
+    private var statusBar: some View {
+        let stats = TextStatistics.compute(markdown: document.text)
+        let goal = GoalStore.shared.goal(for: document.goalKey)
+        return HStack {
+            Image(systemName: editorMode == .rendered ? "doc.richtext" : "chevron.left.forwardslash.chevron.right")
+                .foregroundStyle(.secondary)
+            Text(editorMode == .rendered ? "Rendered" : "Raw Markdown")
+                .foregroundStyle(.secondary)
+            if ViewSettings.shared.focusMode != .off {
+                Text("· Focus: \(ViewSettings.shared.focusMode.label)").foregroundStyle(.tertiary)
             }
-
-            parsedBlocks = MarkdownParser.parse(markdownText)
-            markUnsavedChanges(false)
-            DocumentState.shared.saveAction = { [self] in saveDocument() }
-            DocumentState.shared.openFileAction = { [self] url in openFileFromFinder(url) }
-        }
-        .onDisappear {
-            DocumentState.shared.openFileAction = nil
-            DocumentState.shared.saveAction = nil
-        }
-        .navigationTitle(windowTitle)
-        .focusedValue(\.documentActions, DocumentActions(
-            newDocument: newDocument,
-            openDocument: openDocument,
-            saveDocument: saveDocument,
-            saveDocumentAs: saveDocumentAs
-        ))
-    }
-
-    private func markUnsavedChanges(_ value: Bool) {
-        hasUnsavedChanges = value
-        DocumentState.shared.hasUnsavedChanges = value
-    }
-
-    // MARK: - Window title
-
-    private var windowTitle: String {
-        let name = currentFileURL?.lastPathComponent ?? "Untitled"
-        return hasUnsavedChanges ? "\(name) — Edited" : name
-    }
-
-    // MARK: - File operations
-
-    private func newDocument() {
-        guard confirmDiscardChanges() else { return }
-        markdownText = ""
-        lastSavedText = ""
-        currentFileURL = nil
-        fileBookmarkData = nil
-        UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
-        markUnsavedChanges(false)
-    }
-
-    private func restoreLastFile() {
-        guard let bookmarkData = UserDefaults.standard.data(forKey: Self.bookmarkKey) else {
-            markdownText = Self.sampleMarkdown
-            lastSavedText = Self.sampleMarkdown
-            return
-        }
-        do {
-            var isStale = false
-            let url = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-            // Treat trashed or missing files as deleted.
-            if url.path.contains("/.Trash/") || !FileManager.default.fileExists(atPath: url.path) {
-                UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
-                markdownText = Self.sampleMarkdown
-                lastSavedText = Self.sampleMarkdown
-                return
+            if ViewSettings.shared.typewriterScrolling {
+                Text("· Typewriter").foregroundStyle(.tertiary)
             }
-
-            guard url.startAccessingSecurityScopedResource() else {
-                markdownText = Self.sampleMarkdown
-                lastSavedText = Self.sampleMarkdown
-                return
+            Spacer()
+            if let goal {
+                let current = goal.current(from: stats)
+                ProgressView(value: goal.fraction(current: current))
+                    .frame(width: 60)
+                    .tint(goal.isMet(current: current) ? .green : .accentColor)
+                Text("\(current.formatted()) / \(goal.target.formatted()) \(goal.kind.label.lowercased())")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Text("·").foregroundStyle(.tertiary)
             }
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            if isStale { saveBookmark(for: url) }
-
-            let content = try String(contentsOf: url, encoding: .utf8)
-            markdownText = content
-            lastSavedText = content
-            currentFileURL = url
-            fileBookmarkData = bookmarkData
-        } catch {
-            UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
-            markdownText = Self.sampleMarkdown
-            lastSavedText = Self.sampleMarkdown
+            Text("\(stats.words.formatted()) words")
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+            Text("\(stats.characters.formatted()) chars")
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+            Text(stats.readingMinutes == 0 ? "" : "\(stats.readingMinutes) min read")
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
         }
-    }
-
-    private func saveBookmark(for url: URL) {
-        do {
-            let data = try url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            fileBookmarkData = data
-            UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
-        } catch {
-            print("Could not save bookmark: \(error.localizedDescription)")
-        }
-    }
-
-    /// Loads a file without prompting for unsaved changes — used at launch via "Open With...".
-    private func loadFileDirectly(from url: URL) {
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            markdownText = content
-            lastSavedText = content
-            currentFileURL = url
-            saveBookmark(for: url)
-            markUnsavedChanges(false)
-        } catch {
-            // Fall back to restoring the last file if the "Open With" file can't be read
-            restoreLastFile()
-        }
-    }
-
-    private func openFileFromFinder(_ url: URL) {
-        guard confirmDiscardChanges() else { return }
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            markdownText = content
-            lastSavedText = content
-            currentFileURL = url
-            saveBookmark(for: url)
-            markUnsavedChanges(false)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could not open file"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-        }
-    }
-
-    private func openDocument() {
-        guard confirmDiscardChanges() else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .sourceCode]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Choose a Markdown file to open"
-
-        if panel.runModal() == .OK, let url = panel.url {
-            do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                markdownText = content
-                lastSavedText = content
-                currentFileURL = url
-                saveBookmark(for: url)
-                markUnsavedChanges(false)
-            } catch {
-                let alert = NSAlert()
-                alert.messageText = "Could not open file"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .warning
-                alert.runModal()
-            }
-        }
-    }
-
-    private func saveDocument() {
-        if currentFileURL != nil {
-            guard let bookmarkData = fileBookmarkData else {
-                saveDocumentAs()
-                return
-            }
-            do {
-                var isStale = false
-                let url = try URL(
-                    resolvingBookmarkData: bookmarkData,
-                    options: .withSecurityScope,
-                    relativeTo: nil,
-                    bookmarkDataIsStale: &isStale
-                )
-                guard url.startAccessingSecurityScopedResource() else {
-                    saveDocumentAs()
-                    return
-                }
-                defer { url.stopAccessingSecurityScopedResource() }
-
-                if isStale { saveBookmark(for: url) }
-                writeFile(to: url)
-            } catch {
-                saveDocumentAs()
-            }
-        } else {
-            saveDocumentAs()
-        }
-    }
-
-    private func saveDocumentAs() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = currentFileURL?.lastPathComponent ?? "Untitled.md"
-        panel.message = "Save your Markdown file"
-
-        if panel.runModal() == .OK, let url = panel.url {
-            writeFile(to: url)
-        }
-    }
-
-    private func writeFile(to url: URL) {
-        do {
-            try markdownText.write(to: url, atomically: true, encoding: .utf8)
-            lastSavedText = markdownText
-            currentFileURL = url
-            saveBookmark(for: url)
-            markUnsavedChanges(false)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could not save file"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-        }
-    }
-
-    /// Shows a Save/Don't Save/Cancel alert if there are unsaved changes.
-    /// Returns `true` if the caller should proceed, `false` to cancel.
-    private func confirmDiscardChanges() -> Bool {
-        guard hasUnsavedChanges else { return true }
-
-        let alert = NSAlert()
-        alert.messageText = "Do you want to save changes?"
-        let name = currentFileURL?.lastPathComponent ?? "Untitled"
-        alert.informativeText = "Your changes to \"\(name)\" will be lost if you don't save them."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don't Save")
-        alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        switch response {
-        case .alertFirstButtonReturn:
-            saveDocument()
-            return true
-        case .alertSecondButtonReturn:
-            return true
-        default:
-            return false
-        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(.bar)
     }
 
     // MARK: - Sample markdown for first launch
 
-    private static let sampleMarkdown = """
+    static let sampleMarkdown = """
 # Welcome to Marky Mark
 
-A **live** Markdown editor with *real-time* preview and ***full syntax*** support.
+A Markdown editor with a **rendered** view you can *edit directly* and a ***raw*** view for hand-written markup.
 
 ## Text Formatting
 
@@ -417,9 +304,9 @@ Nested list:
 
 ## Task Lists
 
-- [x] Build the editor pane
-- [x] Build the preview pane
-- [x] Add scroll synchronization
+- [x] Build the raw Markdown editor
+- [x] Build the rendered editor
+- [x] Add a formatting toolbar
 - [x] Support full Markdown syntax
 - [ ] Take over the world
 
@@ -450,44 +337,31 @@ struct HelloWorld: View {
 
 ### Try It Yourself
 
-Edit this text to see the preview update in real time. Click the **?** button or use the toolbar to open the **Markdown Cheat Sheet** for a full syntax reference.
+Type here and use the toolbar to format your text, or switch to **Raw** in the window toolbar to write the Markdown yourself. The **Cheat Sheet** button shows every supported syntax.
 
 Happy writing!
 """
-}
 
-// MARK: - Shared document state for app delegate access
-
-@Observable
-final class DocumentState {
-    static let shared = DocumentState()
-    var hasUnsavedChanges = false
-    var saveAction: (() -> Void)? = nil
-    var openFileAction: ((URL) -> Void)? = nil
-    var pendingFileURL: URL? = nil
-    private init() {}
 }
 
 // MARK: - Focused value for menu commands
 
-struct DocumentActions {
-    var newDocument: () -> Void
-    var openDocument: () -> Void
-    var saveDocument: () -> Void
-    var saveDocumentAs: () -> Void
+struct DocumentFocusKey: FocusedValueKey {
+    typealias Value = Document
 }
 
-struct DocumentActionsKey: FocusedValueKey {
-    typealias Value = DocumentActions
+struct WindowUIStateKey: FocusedValueKey {
+    typealias Value = WindowUIState
 }
 
 extension FocusedValues {
-    var documentActions: DocumentActions? {
-        get { self[DocumentActionsKey.self] }
-        set { self[DocumentActionsKey.self] = newValue }
+    var document: Document? {
+        get { self[DocumentFocusKey.self] }
+        set { self[DocumentFocusKey.self] = newValue }
     }
-}
 
-#Preview {
-    ContentView()
+    var windowUIState: WindowUIState? {
+        get { self[WindowUIStateKey.self] }
+        set { self[WindowUIStateKey.self] = newValue }
+    }
 }

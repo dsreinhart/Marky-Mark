@@ -62,7 +62,7 @@ struct MarkdownCheatSheet: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(Color(.controlBackgroundColor))
+                                .fill(Color(platform: .mmSecondaryBackground))
                         )
 
                     VStack(alignment: .leading, spacing: 2) {
