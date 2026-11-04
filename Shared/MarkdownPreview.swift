@@ -211,15 +211,8 @@ struct MarkdownPreview: View {
     @ViewBuilder
     private func imageView(_ image: (alt: String, source: String)) -> some View {
         if let url = resolve(image.source) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let loaded):
-                    loaded.resizable().scaledToFit().frame(maxHeight: 480).clipShape(RoundedRectangle(cornerRadius: 6))
-                case .failure:
-                    imagePlaceholder(image.alt.isEmpty ? image.source : image.alt)
-                default:
-                    ProgressView().frame(height: 60)
-                }
+            NaturalSizeImage(url: url) {
+                imagePlaceholder(image.alt.isEmpty ? image.source : image.alt)
             }
         } else {
             imagePlaceholder(image.alt.isEmpty ? image.source : image.alt)
@@ -279,4 +272,75 @@ struct MarkdownPreview: View {
             }
         }
     }
+}
+
+// MARK: - Images at their natural size
+
+#if canImport(AppKit)
+typealias PlatformImage = NSImage
+#else
+typealias PlatformImage = UIImage
+#endif
+
+/// Shows an image no larger than its own pixel size, capped to the available width and a
+/// maximum height, flush left. Loads once per URL and caches.
+struct NaturalSizeImage<Placeholder: View>: View {
+    let url: URL
+    @ViewBuilder let placeholder: () -> Placeholder
+    @State private var image: PlatformImage? = nil
+    @State private var failed = false
+
+    private static var cache: NSCache<NSURL, PlatformImage> { ImageCache.shared }
+
+    var body: some View {
+        Group {
+            if let image {
+                #if canImport(AppKit)
+                let swiftUIImage = Image(nsImage: image)
+                #else
+                let swiftUIImage = Image(uiImage: image)
+                #endif
+                swiftUIImage
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: image.size.width, maxHeight: min(image.size.height, 480), alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else if failed {
+                placeholder()
+            } else {
+                ProgressView().frame(height: 60)
+            }
+        }
+        .task(id: url) {
+            if let cached = Self.cache.object(forKey: url as NSURL) {
+                image = cached
+                return
+            }
+            failed = false
+            let loaded: PlatformImage?
+            if url.isFileURL {
+                loaded = PlatformImage(contentsOfFile: url.path)
+            } else if let (data, _) = try? await URLSession.shared.data(from: url) {
+                loaded = PlatformImage(data: data)
+            } else {
+                loaded = nil
+            }
+            if let loaded {
+                Self.cache.setObject(loaded, forKey: url as NSURL)
+                image = loaded
+            } else {
+                failed = true
+            }
+        }
+    }
+}
+
+@MainActor
+private enum ImageCache {
+    static let shared: NSCache<NSURL, PlatformImage> = {
+        let cache = NSCache<NSURL, PlatformImage>()
+        cache.countLimit = 60
+        return cache
+    }()
 }
