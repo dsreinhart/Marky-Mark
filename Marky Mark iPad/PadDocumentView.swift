@@ -7,6 +7,8 @@
 
 import SwiftUI
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct PadDocumentView: View {
     @Binding var document: MarkdownFileDocument
@@ -25,6 +27,12 @@ struct PadDocumentView: View {
     @State private var showExportPreview = false
     @State private var shareFile: ShareFile? = nil
     @State private var errorMessage: String? = nil
+    @State private var showPhotoPicker = false
+    @State private var photoItem: PhotosPickerItem? = nil
+    @State private var showFilePicker = false
+    @State private var pendingImage: PadImageStore.Prepared? = nil
+    @State private var showFolderAccessPrompt = false
+    @State private var showFolderPicker = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var theme = ThemeSettings.shared
 
@@ -53,7 +61,9 @@ struct PadDocumentView: View {
     var body: some View {
         VStack(spacing: 0) {
             if effectiveLayout != .preview {
-                PadFormattingToolbar(controller: controller)
+                PadFormattingToolbar(controller: controller,
+                                     onPickPhoto: { showPhotoPicker = true },
+                                     onPickFile: { showFilePicker = true })
                 Divider()
             }
             HStack(spacing: 0) {
@@ -93,6 +103,32 @@ struct PadDocumentView: View {
         .sheet(isPresented: $showCheatSheet) { MarkdownCheatSheet() }
         .sheet(isPresented: $showExportPreview) { PadExportPreviewView(markdown: document.text, title: title) }
         .sheet(item: $shareFile) { file in ActivityView(items: [file.url]) }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            photoItem = nil
+            Task { await insertPickedPhoto(item) }
+        }
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.image]) { result in
+            switch result {
+            case .success(let url): insertPickedFile(url)
+            case .failure(let error): errorMessage = error.localizedDescription
+            }
+        }
+        .alert("Save the image next to this document?", isPresented: $showFolderAccessPrompt) {
+            Button("Choose Folder…") { showFolderPicker = true }
+            Button("Embed in Text Instead") { finishPendingImage(allowEmbed: true) }
+            Button("Cancel", role: .cancel) { pendingImage = nil }
+        } message: {
+            Text("Marky Mark can only write inside folders you've opened. Open this document's folder once and images will be saved beside it as files. Otherwise the image is embedded in the Markdown.")
+        }
+        .sheet(isPresented: $showFolderPicker) {
+            FolderPicker(startingAt: fileURL?.deletingLastPathComponent()) { folder in
+                showFolderPicker = false
+                if let folder { PadFolderAccess.grant(folder) }
+                finishPendingImage(allowEmbed: folder == nil)
+            }
+        }
         .alert("Export failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
         } message: {
@@ -182,5 +218,58 @@ struct PadDocumentView: View {
 
     private func share(_ make: () throws -> URL) {
         do { shareFile = ShareFile(url: try make()) } catch { errorMessage = error.localizedDescription }
+    }
+
+    // MARK: - Images
+
+    private func insertPickedPhoto(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            errorMessage = "Could not load that photo."
+            return
+        }
+        let type = item.supportedContentTypes.first
+        insertImage(data: data, name: item.itemIdentifier.map { _ in "photo" }, type: type)
+    }
+
+    private func insertPickedFile(_ url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            errorMessage = "Could not read that file."
+            return
+        }
+        insertImage(data: data, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension))
+    }
+
+    private func insertImage(data: Data, name: String?, type: UTType?) {
+        guard let prepared = PadImageStore.prepare(data: data, suggestedName: name, type: type) else {
+            errorMessage = "That file isn't an image."
+            return
+        }
+        if let stored = PadImageStore.storeBeside(prepared, documentURL: fileURL) {
+            insert(stored)
+        } else if fileURL != nil {
+            pendingImage = prepared
+            showFolderAccessPrompt = true
+        } else {
+            insert(PadImageStore.embed(prepared))
+        }
+    }
+
+    /// After the folder prompt: try the folder again, else embed if the user agreed.
+    private func finishPendingImage(allowEmbed: Bool) {
+        guard let prepared = pendingImage else { return }
+        pendingImage = nil
+        if let stored = PadImageStore.storeBeside(prepared, documentURL: fileURL) {
+            insert(stored)
+        } else if allowEmbed {
+            insert(PadImageStore.embed(prepared))
+        } else {
+            errorMessage = "Couldn't write to that folder. The image was not added."
+        }
+    }
+
+    private func insert(_ stored: PadImageStore.Stored) {
+        controller.insertBlock("![\(stored.alt)](\(stored.source))")
     }
 }

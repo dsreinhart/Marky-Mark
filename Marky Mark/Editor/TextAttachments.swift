@@ -118,7 +118,7 @@ final class ImageLoader {
         let trimmed = source.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if scheme == "http" || scheme == "https" || scheme == "file" { return url }
+            if scheme == "http" || scheme == "https" || scheme == "file" || scheme == "data" { return url }
         }
         let expanded = (trimmed as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {

@@ -58,6 +58,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         )
 
         textView.delegate = context.coordinator
+        textView.layoutManager?.delegate = context.coordinator
         textView.string = text
 
         scrollView.documentView = textView
@@ -181,6 +182,17 @@ struct MarkdownEditorView: NSViewRepresentable {
         func applySyntaxHighlighting() {
             guard let textView, let textStorage = textView.textStorage else { return }
             MarkdownHighlighter.highlight(textStorage, fontSize: fontSize, baseColor: baseColor)
+            textView.layoutManager?.invalidateGlyphs(forCharacterRange: NSRange(location: 0, length: textStorage.length),
+                                                     changeInLength: 0, actualCharacterRange: nil)
         }
+    }
+}
+
+extension MarkdownEditorView.Coordinator: @MainActor NSLayoutManagerDelegate {
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>, characterIndexes: UnsafePointer<Int>,
+                       font: NSFont, forGlyphRange glyphRange: NSRange) -> Int {
+        MarkdownHighlighter.generateGlyphs(layoutManager, glyphs: glyphs, properties: properties,
+                                           characterIndexes: characterIndexes, font: font, glyphRange: glyphRange)
     }
 }

@@ -9,6 +9,8 @@ import SwiftUI
 
 struct PadFormattingToolbar: View {
     let controller: PadEditorController
+    var onPickPhoto: () -> Void = {}
+    var onPickFile: () -> Void = {}
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -34,7 +36,22 @@ struct PadFormattingToolbar: View {
                 separator
 
                 tool("link", "Link") { controller.wrap(prefix: "[", suffix: "](https://)", placeholder: "link text") }
-                tool("photo", "Image") { controller.insertBlock("![alt text](image.png)", selectingPlaceholder: "image.png") }
+                Menu {
+                    Button("Photo Library…", systemImage: "photo.on.rectangle", action: onPickPhoto)
+                    Button("Choose File…", systemImage: "folder", action: onPickFile)
+                    Divider()
+                    Button("Image Link…", systemImage: "link") {
+                        controller.insertBlock("![alt text](https://)", selectingPlaceholder: "https://")
+                    }
+                } label: {
+                    Image(systemName: "photo")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 34, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Image")
+                .accessibilityLabel("Image")
                 separator
 
                 tool("list.bullet", "Bulleted list") { controller.togglePrefix("- ", alternatives: ["* ", "+ ", "- [ ] ", "- [x] ", "1. "]) }

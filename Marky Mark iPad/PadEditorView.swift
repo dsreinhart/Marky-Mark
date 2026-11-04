@@ -23,6 +23,7 @@ struct PadEditorView: UIViewRepresentable {
     func makeUIView(context: Context) -> PadTextView {
         let textView = PadTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
+        textView.layoutManager.delegate = context.coordinator
         textView.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = textColor
         textView.autocorrectionType = .yes
@@ -85,6 +86,8 @@ struct PadEditorView: UIViewRepresentable {
 
         func highlight(_ textView: UITextView) {
             MarkdownHighlighter.highlight(textView.textStorage, fontSize: fontSize, baseColor: textColor)
+            textView.layoutManager.invalidateGlyphs(forCharacterRange: NSRange(location: 0, length: textView.textStorage.length),
+                                                    changeInLength: 0, actualCharacterRange: nil)
         }
 
         /// Pushes the text view's content to SwiftUI and recolors.
@@ -114,6 +117,15 @@ struct PadEditorView: UIViewRepresentable {
                 textView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
             }
         }
+    }
+}
+
+extension PadEditorView.Coordinator: @MainActor NSLayoutManagerDelegate {
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>, characterIndexes: UnsafePointer<Int>,
+                       font: UIFont, forGlyphRange glyphRange: NSRange) -> Int {
+        MarkdownHighlighter.generateGlyphs(layoutManager, glyphs: glyphs, properties: properties,
+                                           characterIndexes: characterIndexes, font: font, glyphRange: glyphRange)
     }
 }
 

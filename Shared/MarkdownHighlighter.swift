@@ -15,6 +15,10 @@ import UIKit
 @MainActor
 enum MarkdownHighlighter {
 
+    /// Marks text the editor should not draw (embedded image payloads).
+    nonisolated static let hiddenKey = NSAttributedString.Key("mm.hidden")
+
+
     /// Recolors the whole storage. Call inside the text view's own editing cycle.
     static func highlight(_ textStorage: NSTextStorage, fontSize size: CGFloat, baseColor: PlatformColor) {
         let fullRange = NSRange(location: 0, length: textStorage.length)
@@ -99,7 +103,61 @@ enum MarkdownHighlighter {
                   font: PlatformFont.monospacedSystemFont(ofSize: max(size - 1, 8), weight: .medium), in: textStorage)
         }
 
+        hideEmbeddedImages(in: textStorage, baseColor: baseColor)
         textStorage.endEditing()
+    }
+
+    /// Folds `data:` image payloads: the prefix stays visible, the base64 is hidden from layout.
+    /// Plain string scanning: a regex gives up on multi-megabyte payloads.
+    private static func hideEmbeddedImages(in storage: NSTextStorage, baseColor: PlatformColor) {
+        let text = storage.string as NSString
+        var cursor = 0
+        while cursor < text.length {
+            let open = text.range(of: "](data:", options: [], range: NSRange(location: cursor, length: text.length - cursor))
+            guard open.location != NSNotFound else { break }
+            let prefixStart = open.location + 2
+            let headerLimit = NSRange(location: prefixStart, length: min(120, text.length - prefixStart))
+            let marker = text.range(of: ";base64,", options: [], range: headerLimit)
+            guard marker.location != NSNotFound else { cursor = NSMaxRange(open); continue }
+            let payloadStart = NSMaxRange(marker)
+            let close = text.range(of: ")", options: [], range: NSRange(location: payloadStart, length: text.length - payloadStart))
+            guard close.location != NSNotFound else { break }
+            let payload = NSRange(location: payloadStart, length: close.location - payloadStart)
+            if payload.length >= 40 {
+                storage.addAttributes([.foregroundColor: PlatformColor.mmTertiaryLabel],
+                                      range: NSRange(location: prefixStart, length: payloadStart - prefixStart))
+                storage.addAttributes([hiddenKey: true, .foregroundColor: PlatformColor.clear], range: payload)
+            }
+            cursor = NSMaxRange(close)
+        }
+    }
+
+    /// Glyph-generation hook for NSLayoutManagerDelegate: gives hidden characters null glyphs.
+    /// Returns the number of glyphs handled (0 lets the layout manager do its default).
+    static func generateGlyphs(_ layoutManager: NSLayoutManager,
+                               glyphs: UnsafePointer<CGGlyph>,
+                               properties: UnsafePointer<NSLayoutManager.GlyphProperty>,
+                               characterIndexes: UnsafePointer<Int>,
+                               font: PlatformFont,
+                               glyphRange: NSRange) -> Int {
+        guard let storage = layoutManager.textStorage, glyphRange.length > 0 else { return 0 }
+        let firstChar = characterIndexes[0]
+        let lastChar = characterIndexes[glyphRange.length - 1]
+        var hasHidden = false
+        storage.enumerateAttribute(hiddenKey, in: NSRange(location: firstChar, length: lastChar - firstChar + 1), options: []) { value, _, stop in
+            if value != nil { hasHidden = true; stop.pointee = true }
+        }
+        guard hasHidden else { return 0 }
+        var updated = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
+        for index in 0..<glyphRange.length
+        where storage.attribute(hiddenKey, at: characterIndexes[index], effectiveRange: nil) != nil {
+            updated[index] = .null
+        }
+        updated.withUnsafeBufferPointer { buffer in
+            layoutManager.setGlyphs(glyphs, properties: buffer.baseAddress!, characterIndexes: characterIndexes,
+                                    font: font, forGlyphRange: glyphRange)
+        }
+        return glyphRange.length
     }
 
     private static func color(_ line: String, offset: Int, pattern: String, color: PlatformColor, font: PlatformFont,
