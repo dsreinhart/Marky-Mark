@@ -1,6 +1,6 @@
 //
 //  DashboardView.swift
-//  Marky Mark
+//  Markwright
 //
 //  Right-hand inspector: statistics, writing goal, outline, keywords, attachments.
 //

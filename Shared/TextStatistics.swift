@@ -1,6 +1,6 @@
 //
 //  TextStatistics.swift
-//  Marky Mark
+//  Markwright
 //
 //  Word, character, sentence and paragraph counts, reading time, outline and
 //  attachment lists for the dashboard. Comments and front matter are ignored.

@@ -1,6 +1,6 @@
 //
 //  SettingsView.swift
-//  Marky Mark
+//  Markwright
 //
 //  Created by David Reinhart on 4/22/26.
 //
@@ -26,6 +26,13 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Typography", systemImage: "textformat.size")
                 }
+
+            #if os(macOS)
+            FilesSettingsTab()
+                .tabItem {
+                    Label("Files", systemImage: "doc")
+                }
+            #endif
         }
         .frame(width: 480, height: 520)
     }
@@ -221,3 +228,48 @@ extension View {
 #Preview {
     SettingsView()
 }
+
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+
+/// Finder integration: which app opens Markdown files.
+private struct FilesSettingsTab: View {
+    @State private var defaultApp: String? = nil
+    @State private var message: String? = nil
+
+    private static let markdownType = UTType("net.daringfireball.markdown") ?? .plainText
+
+    var body: some View {
+        Form {
+            Section("Markdown Files") {
+                Text("Markwright is listed in Finder's Open With menu for .md files. Make it the default so double-clicking a Markdown file opens it here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Current default", value: defaultApp ?? "Unknown")
+                Button("Make Markwright the Default") { makeDefault() }
+                    .disabled(defaultApp == "Markwright")
+                if let message {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        let url = NSWorkspace.shared.urlForApplication(toOpen: Self.markdownType)
+        defaultApp = url?.deletingPathExtension().lastPathComponent
+    }
+
+    private func makeDefault() {
+        NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: Self.markdownType) { error in
+            Task { @MainActor in
+                message = error.map { "Could not change the default: \($0.localizedDescription)" } ?? "Markdown files now open in Markwright."
+                refresh()
+            }
+        }
+    }
+}
+#endif

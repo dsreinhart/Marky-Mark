@@ -1,6 +1,6 @@
 //
 //  InlineParser.swift
-//  Marky Mark
+//  Markwright
 //
 //  A small CommonMark-style inline parser. It understands code spans, links,
 //  images, backslash escapes, and nested emphasis (*, _, ** , ~~) using the

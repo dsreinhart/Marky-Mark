@@ -1,12 +1,13 @@
 //
 //  HTMLExporter.swift
-//  Marky Mark
+//  Markwright
 //
 //  Markdown → standalone HTML with a choice of style templates. Used for the
 //  export preview, HTML/PDF/Word export and printing.
 //
 
 import Foundation
+import UniformTypeIdentifiers
 
 enum ExportStyle: String, CaseIterable, Identifiable {
     case clean, classic, modern, manuscript
@@ -85,8 +86,11 @@ enum ExportStyle: String, CaseIterable, Identifiable {
 @MainActor
 enum HTMLExporter {
 
-    /// A complete HTML document.
-    static func document(markdown: String, title: String, style: ExportStyle) -> String {
+    /// Folder used to resolve relative image paths while rendering; images found there are embedded.
+    private static var imageBase: URL? = nil
+
+    /// A complete HTML document. With `documentURL`, local images are embedded so the file stands alone.
+    static func document(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil) -> String {
         """
         <!DOCTYPE html>
         <html lang="en">
@@ -99,14 +103,16 @@ enum HTMLExporter {
         </style>
         </head>
         <body>
-        \(body(markdown: markdown))
+        \(body(markdown: markdown, documentURL: documentURL))
         </body>
         </html>
         """
     }
 
     /// Just the content markup (no html/head wrapper).
-    static func body(markdown: String) -> String {
+    static func body(markdown: String, documentURL: URL? = nil) -> String {
+        imageBase = documentURL?.deletingLastPathComponent()
+        defer { imageBase = nil }
         var out = ""
         var lists: [(tag: String, indent: Int)] = []
         var footnotes: [(id: String, html: String)] = []
@@ -203,7 +209,7 @@ enum HTMLExporter {
             case .strong(let kids): out += "<strong>\(render(kids))</strong>"
             case .strike(let kids): out += "<del>\(render(kids))</del>"
             case .link(let label, let url): out += "<a href=\"\(escapeAttribute(url))\">\(render(label))</a>"
-            case .image(let alt, let source): out += "<img src=\"\(escapeAttribute(source))\" alt=\"\(escapeAttribute(alt))\">"
+            case .image(let alt, let source): out += "<img src=\"\(escapeAttribute(embedded(source)))\" alt=\"\(escapeAttribute(alt))\">"
             case .highlight(let kids): out += "<mark>\(render(kids))</mark>"
             case .tag(let name): out += "<span class=\"tag\">#\(escape(name))</span>"
             case .wikiLink(let target, let label):
@@ -214,6 +220,22 @@ enum HTMLExporter {
             }
         }
         return out
+    }
+
+    /// A `data:` URL for a local image next to the document; anything else is returned unchanged.
+    static func embedded(_ source: String) -> String {
+        guard let imageBase else { return source }
+        let lower = source.lowercased()
+        if lower.hasPrefix("data:") || lower.hasPrefix("http://") || lower.hasPrefix("https://") { return source }
+        let fileURL: URL
+        if lower.hasPrefix("file://"), let url = URL(string: source) {
+            fileURL = url
+        } else {
+            fileURL = URL(fileURLWithPath: source.removingPercentEncoding ?? source, relativeTo: imageBase).standardizedFileURL
+        }
+        guard let data = try? Data(contentsOf: fileURL), data.count <= 30_000_000 else { return source }
+        let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        return "data:\(mime);base64,\(data.base64EncodedString())"
     }
 
     static func escape(_ text: String) -> String {

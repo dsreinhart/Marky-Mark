@@ -1,6 +1,6 @@
 //
 //  MarkdownModel.swift
-//  Marky Mark
+//  Markwright
 //
 //  Semantic model shared by the rendered editor, the renderer and the serializer.
 //  The rendered editor stores *semantic* attributes (block kind, bold, italic, …)
@@ -203,7 +203,7 @@ nonisolated struct InlineStyle: Equatable {
 // MARK: - Wiki links
 
 nonisolated enum WikiLink {
-    static let scheme = "markymark"
+    static let scheme = "markwright"
 
     /// Internal URL that stands for a `[[target]]` link in attributed text.
     static func url(for target: String) -> URL? {
@@ -214,7 +214,7 @@ nonisolated enum WikiLink {
         return components.url
     }
 
-    /// The sheet name a `markymark://wiki/...` URL points at, or nil for other URLs.
+    /// The sheet name a `markwright://wiki/...` URL points at, or nil for other URLs.
     static func target(from url: URL) -> String? {
         guard url.scheme == scheme, url.host == "wiki" else { return nil }
         let path = url.path

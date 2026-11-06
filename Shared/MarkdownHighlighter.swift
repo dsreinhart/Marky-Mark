@@ -1,6 +1,6 @@
 //
 //  MarkdownHighlighter.swift
-//  Marky Mark
+//  Markwright
 //
 //  Syntax coloring for the raw Markdown editor, shared by the Mac and iPad apps.
 //

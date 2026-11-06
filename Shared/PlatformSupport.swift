@@ -1,6 +1,6 @@
 //
 //  PlatformSupport.swift
-//  Marky Mark
+//  Markwright
 //
 //  Small shims so the shared code reads the same on macOS and iPadOS.
 //

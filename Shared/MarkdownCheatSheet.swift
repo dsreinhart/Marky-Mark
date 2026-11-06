@@ -1,6 +1,6 @@
 //
 //  MarkdownCheatSheet.swift
-//  Marky Mark
+//  Markwright
 //
 //  Created by David Reinhart on 4/22/26.
 //

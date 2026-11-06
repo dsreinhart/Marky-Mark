@@ -1,6 +1,6 @@
 //
 //  FrontMatter.swift
-//  Marky Mark
+//  Markwright
 //
 //  Minimal YAML front matter reading and editing (enough for `tags`/`keywords`).
 //

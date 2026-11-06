@@ -1,6 +1,6 @@
 //
 //  WritingGoal.swift
-//  Marky Mark
+//  Markwright
 //
 //  Per-document writing goals (word or character targets, optional deadline).
 //

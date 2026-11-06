@@ -1,6 +1,6 @@
 //
 //  MarkdownPreview.swift
-//  Marky Mark
+//  Markwright
 //
 //  Read-only rendered view of a Markdown document, styled from ThemeSettings.
 //  Used by the iPad app beside the raw editor.
