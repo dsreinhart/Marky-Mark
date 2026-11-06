@@ -59,6 +59,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         textView.delegate = context.coordinator
         textView.layoutManager?.delegate = context.coordinator
+        textView.wikiCompletions = { partial in LibraryModel.shared.sheetNames(matching: partial) }
         textView.string = text
 
         scrollView.documentView = textView
@@ -68,7 +69,16 @@ struct MarkdownEditorView: NSViewRepresentable {
         context.coordinator.applySyntaxHighlighting()
         controller?.jumpToHeading = { [weak coordinator = context.coordinator] index in coordinator?.jumpToHeading(index) }
         controller?.splitAtCursor = { [weak coordinator = context.coordinator] in coordinator?.splitAtCursor() }
+        controller?.rawTextView = textView
+        controller?.refreshActive()
         return scrollView
+    }
+
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        if let controller = coordinator.parent.controller, controller.rawTextView === nsView.documentView {
+            controller.rawTextView = nil
+            controller.refreshActive()
+        }
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -112,6 +122,20 @@ struct MarkdownEditorView: NSViewRepresentable {
             parent.text = textView.string
             applySyntaxHighlighting()
             applyBehaviors()
+            (textView as? MarkyTextView)?.showWikiCompletionsIfNeeded()
+        }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL, let target = WikiLink.target(from: url) else { return false }
+            WikiLinkResolver.open(target, near: parent.controller?.documentURL)
+            return true
+        }
+
+        func textView(_ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange,
+                      indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+            guard let marky = textView as? MarkyTextView, marky.wikiPartialRange() != nil else { return words }
+            let partial = (textView.string as NSString).substring(with: charRange)
+            return marky.wikiCompletions?(partial) ?? []
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

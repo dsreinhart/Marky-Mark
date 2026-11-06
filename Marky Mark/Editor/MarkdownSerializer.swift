@@ -100,6 +100,9 @@ enum MarkdownSerializer {
             case .frontMatter:
                 let raw = rawText(text, range: content)
                 emitter.emit(["---"] + raw.components(separatedBy: MarkdownSyntax.lineSeparatorString) + ["---"])
+            case .footnote(let id):
+                let inline = singleLine(inlineMarkdown(text, range: content))
+                emitter.emit(["[^\(id)]: " + inline], list: block)
             }
         }
         table?.flush(into: &emitter)
@@ -195,6 +198,7 @@ enum MarkdownSerializer {
     private enum Wrapper: Equatable {
         case link(String)
         case strike
+        case highlight
         case bold
         case italic
 
@@ -202,6 +206,7 @@ enum MarkdownSerializer {
             switch self {
             case .link: return "["
             case .strike: return "~~"
+            case .highlight: return "=="
             case .bold: return "**"
             case .italic: return "*"
             }
@@ -211,6 +216,7 @@ enum MarkdownSerializer {
             switch self {
             case .link(let url): return "](\(url))"
             case .strike: return "~~"
+            case .highlight: return "=="
             case .bold: return "**"
             case .italic: return "*"
             }
@@ -220,6 +226,7 @@ enum MarkdownSerializer {
             var list: [Wrapper] = []
             if let link = style.link, !link.isEmpty { list.append(.link(link)) }
             if style.strike { list.append(.strike) }
+            if style.highlight { list.append(.highlight) }
             if style.bold { list.append(.bold) }
             if style.italic { list.append(.italic) }
             return list
@@ -289,6 +296,22 @@ enum MarkdownSerializer {
                 transition(to: [])
                 out += "![\(alt.replacingOccurrences(of: "]", with: "\\]"))](\(source))"
             case .text(let string, let style):
+                // Wiki links and footnote references are atomic tokens.
+                if let target = style.wikiLink {
+                    var outer = style
+                    outer.wikiLink = nil
+                    transition(to: orderedWanted(outer))
+                    let label = string.trimmingCharacters(in: .whitespaces)
+                    out += (label.isEmpty || label == target) ? "[[\(target)]]" : "[[\(target)|\(label)]]"
+                    continue
+                }
+                if let id = style.footnoteRef {
+                    var outer = style
+                    outer.footnoteRef = nil
+                    transition(to: orderedWanted(outer))
+                    out += "[^\(id)]"
+                    continue
+                }
                 let chars = Array(string)
                 var coreStart = 0
                 while coreStart < chars.count, chars[coreStart].isWhitespace { coreStart += 1 }
@@ -342,9 +365,15 @@ enum MarkdownSerializer {
                 out += (canOpen || canClose) ? "\\\(c)" : String(c)
             case "~":
                 out += (prev == "~" || next == "~") ? "\\~" : "~"
+            case "=":
+                out += (prev == "=" || next == "=") ? "\\=" : "="
             case "[":
-                let rest = String(chars[(index + 1)...])
-                out += rest.contains("](") ? "\\[" : "["
+                if next == "[" || next == "^" {
+                    out += "\\["
+                } else {
+                    let rest = String(chars[(index + 1)...])
+                    out += rest.contains("](") ? "\\[" : "["
+                }
             default:
                 out.append(c)
             }

@@ -150,6 +150,12 @@ struct MarkdownPreview: View {
                 Text(text).font(bodyFont).italic().foregroundStyle(.secondary).padding(.leading, 12)
             }
             .padding(.vertical, 2)
+        case .footnoteDefinition(let id, let text):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(id).font(font(size: bodySize * 0.75)).foregroundStyle(theme.linkColor)
+                Text(inline(text, base: font(size: bodySize * 0.9))).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            .padding(.leading, 8)
         case .frontMatter, .blank:
             Spacer().frame(height: 6)
         }
@@ -268,6 +274,30 @@ struct MarkdownPreview: View {
                 var piece = AttributedString("\u{1F5BC} " + (alt.isEmpty ? source : alt))
                 piece.foregroundColor = theme.linkColor
                 if let url = resolve(source) { piece.link = url }
+                result.append(piece)
+            case .highlight(let kids):
+                var inner = AttributedString()
+                append(kids, to: &inner, base: base, bold: bold, italic: italic, strike: strike, link: link)
+                inner.backgroundColor = Color.yellow.opacity(0.35)
+                result.append(inner)
+            case .tag(let name):
+                var piece = AttributedString("#" + name)
+                piece.font = base
+                piece.foregroundColor = Color.accentColor
+                piece.backgroundColor = Color.accentColor.opacity(0.1)
+                result.append(piece)
+            case .wikiLink(let target, let label):
+                var piece = AttributedString(label ?? target)
+                piece.font = base
+                piece.foregroundColor = theme.linkColor
+                piece.underlineStyle = .single
+                if let url = WikiLink.url(for: target) { piece.link = url }
+                result.append(piece)
+            case .footnoteRef(let id):
+                var piece = AttributedString(id)
+                piece.font = font(size: bodySize * 0.7)
+                piece.baselineOffset = bodySize * 0.4
+                piece.foregroundColor = theme.linkColor
                 result.append(piece)
             }
         }

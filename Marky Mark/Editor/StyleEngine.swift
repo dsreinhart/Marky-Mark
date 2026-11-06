@@ -125,9 +125,12 @@ final class StyleEngine {
             size = max(size - 1, 8)
         case .horizontalRule:
             size = 4
+        case .footnote:
+            size *= 0.9
         default:
             break
         }
+        if inline.footnoteRef != nil { size *= 0.7 }
         if isHeaderCell { weight = .bold }
 
         if monospaced {
@@ -186,6 +189,11 @@ final class StyleEngine {
                 divider.setWidth(4, type: .absoluteValueType, for: .padding, edge: .maxY)
                 ps.textBlocks = [divider]
             }
+        case .footnote:
+            ps.firstLineHeadIndent = 4
+            ps.headIndent = 4 + Self.listMarkerWidth
+            ps.tabStops = [NSTextTab(textAlignment: .left, location: 4 + Self.listMarkerWidth)]
+            ps.paragraphSpacing = 4
         case .bullet, .ordered, .task:
             let base = CGFloat(block.indent) * Self.listIndentStep + 4
             ps.firstLineHeadIndent = base
@@ -283,6 +291,7 @@ final class StyleEngine {
         var strike = inline.strike
         switch block.kind {
         case .heading: color = style.headingColor
+        case .footnote: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
         case .blockquote: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
         case .comment: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.6)
         case .frontMatter: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
@@ -291,9 +300,18 @@ final class StyleEngine {
             strike = true
         default: break
         }
-        if inline.link != nil {
+        if inline.wikiLink != nil {
+            color = style.linkColor
+            attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+        } else if inline.link != nil {
             color = style.linkColor
             attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        } else if inline.footnoteRef != nil {
+            color = style.linkColor
+            attrs[.baselineOffset] = style.bodySize * 0.4
+        } else if inline.tag {
+            color = .controlAccentColor
+            attrs[.backgroundColor] = NSColor.controlAccentColor.withAlphaComponent(0.12)
         } else if inline.strike {
             color = style.strikethroughColor
         }
@@ -304,13 +322,26 @@ final class StyleEngine {
         if inline.code {
             attrs[.backgroundColor] = style.inlineCodeBackground.withAlphaComponent(0.5)
         }
+        if inline.highlight {
+            attrs[.backgroundColor] = NSColor.systemYellow.withAlphaComponent(0.35)
+        }
         inline.apply(to: &attrs)
         return attrs
     }
 
     /// Attributes for the text part of a list marker ("•\t", "1.\t", "\t" after a checkbox).
     func markerAttributes(block: BlockInfo) -> [NSAttributedString.Key: Any] {
-        [
+        if case .footnote = block.kind {
+            return [
+                .mmBlock: block,
+                .mmMarker: true,
+                .paragraphStyle: paragraphStyle(for: block),
+                .font: NSFont.monospacedDigitSystemFont(ofSize: style.bodySize * 0.7, weight: .medium),
+                .foregroundColor: style.linkColor,
+                .baselineOffset: style.bodySize * 0.35,
+            ]
+        }
+        return [
             .mmBlock: block,
             .mmMarker: true,
             .paragraphStyle: paragraphStyle(for: block),
@@ -355,6 +386,8 @@ final class StyleEngine {
             return NSAttributedString(string: "\u{2022}\t", attributes: markerAttributes(block: block))
         case .ordered:
             return NSAttributedString(string: "\(number).\t", attributes: markerAttributes(block: block))
+        case .footnote(let id):
+            return NSAttributedString(string: "\(id)\t", attributes: markerAttributes(block: block))
         case .task(let checked):
             let box = checkbox(checked: checked)
             let result = NSMutableAttributedString(attachment: box)

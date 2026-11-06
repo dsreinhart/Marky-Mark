@@ -25,6 +25,7 @@ final class DocumentStore {
     @ObservationIgnored var isTerminating = false
 
     private enum Keys {
+        static let recents = "recentDocuments"
         static let session = "openDocuments"
         static let launched = "didLaunchBefore"
         static let legacyBookmark = "lastOpenedFileBookmark"
@@ -36,7 +37,9 @@ final class DocumentStore {
         var draftID: UUID? = nil
     }
 
-    private init() {}
+    private init() {
+        loadRecents()
+    }
 
     /// Lets tests point the store at a scratch folder.
     nonisolated(unsafe) static var supportFolderOverride: URL? = nil
@@ -87,8 +90,65 @@ final class DocumentStore {
 
     private func add(_ document: Document) {
         documents.append(document)
-        document.onFileChange = { [weak self] in self?.saveSession() }
+        document.onFileChange = { [weak self] in
+            self?.saveSession()
+            if let url = document.fileURL { self?.noteRecent(url) }
+        }
+        if let url = document.fileURL { noteRecent(url) }
         saveSession()
+    }
+
+    // MARK: - Recent files
+
+    struct RecentEntry: Identifiable, Hashable {
+        let url: URL
+        var id: String { url.path }
+        var name: String { url.lastPathComponent }
+    }
+
+    private(set) var recents: [RecentEntry] = []
+    @ObservationIgnored private var recentBookmarks: [Data] = []
+    private static let maxRecents = 15
+
+    private func loadRecents() {
+        recentBookmarks = (UserDefaults.standard.array(forKey: Keys.recents) as? [Data]) ?? []
+        recents = recentBookmarks.compactMap { data in
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+            return RecentEntry(url: url)
+        }
+    }
+
+    func noteRecent(_ url: URL) {
+        guard let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) else { return }
+        let path = url.standardizedFileURL.path
+        var entries = recents.filter { $0.url.standardizedFileURL.path != path }
+        var bookmarks: [Data] = []
+        entries.insert(RecentEntry(url: url), at: 0)
+        bookmarks.append(data)
+        for entry in entries.dropFirst() {
+            if let index = recents.firstIndex(of: entry), index < recentBookmarks.count { bookmarks.append(recentBookmarks[index]) }
+        }
+        if entries.count > Self.maxRecents { entries = Array(entries.prefix(Self.maxRecents)); bookmarks = Array(bookmarks.prefix(Self.maxRecents)) }
+        recents = entries
+        recentBookmarks = bookmarks
+        UserDefaults.standard.set(bookmarks, forKey: Keys.recents)
+    }
+
+    func clearRecents() {
+        recents = []
+        recentBookmarks = []
+        UserDefaults.standard.removeObject(forKey: Keys.recents)
+    }
+
+    /// Opens a recent file in a tab, using its security-scoped bookmark.
+    func openRecent(_ entry: RecentEntry) {
+        guard let index = recents.firstIndex(of: entry), index < recentBookmarks.count else { return }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: recentBookmarks[index], options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        if let document = openDocument(at: url) { show(document) }
     }
 
     /// Brings the document's tab forward, opening a window for it if needed.

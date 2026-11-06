@@ -150,6 +150,7 @@ final class Document: Identifiable {
             lastSavedText = text
             fileURL = url
             hasUnsavedChanges = false
+            if LibraryModel.shared.contains(url) { LibraryModel.shared.scheduleRefresh() }
             return true
         } catch {
             print("Save failed: \(error.localizedDescription)")

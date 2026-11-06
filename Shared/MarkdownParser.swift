@@ -21,6 +21,7 @@ enum MarkdownBlock: Identifiable {
     case table(headers: [String], rows: [[String]])
     case comment(text: String)
     case frontMatter(text: String)
+    case footnoteDefinition(id: String, text: String)
     case blank
 
     var id: String {
@@ -36,6 +37,7 @@ enum MarkdownBlock: Identifiable {
         case .table(let headers, _): return "table-\(headers.joined(separator: "-"))"
         case .comment(let text): return "comment-\(text.prefix(40))"
         case .frontMatter(let text): return "frontmatter-\(text.prefix(40))"
+        case .footnoteDefinition(let id, let text): return "footnote-\(id)-\(text.prefix(40))"
         case .blank: return "blank-\(UUID().uuidString)"
         }
     }
@@ -138,6 +140,19 @@ struct MarkdownParser {
                 }
             }
 
+            // Footnote definition: [^id]: text (indented continuation lines are joined)
+            if let footnote = line.prefixMatch(of: /^\[\^([^\]\s]+)\]:\s?(.*)$/) {
+                var parts = [String(footnote.2)]
+                i += 1
+                while i < lines.count, lines[i].hasPrefix("    ") || lines[i].hasPrefix("\t"),
+                      !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    parts.append(lines[i].trimmingCharacters(in: .whitespaces))
+                    i += 1
+                }
+                blocks.append(.footnoteDefinition(id: String(footnote.1), text: parts.joined(separator: " ")))
+                continue
+            }
+
             // Heading
             if let headingMatch = line.prefixMatch(of: /^(#{1,6})\s+(.+)/) {
                 let level = headingMatch.1.count
@@ -210,6 +225,7 @@ struct MarkdownParser {
                     || nextTrimmed.hasPrefix("#")
                     || nextTrimmed.hasPrefix("<!--")
                     || nextTrimmed.hasPrefix("```")
+                    || nextTrimmed.prefixMatch(of: /^\[\^[^\]\s]+\]:/) != nil
                     || nextTrimmed.hasPrefix(">")
                     || nextTrimmed.range(of: #"^[-*_]{3,}$"#, options: .regularExpression) != nil
                     || nextTrimmed.prefixMatch(of: /^(\s*)[*\-+]\s+/) != nil

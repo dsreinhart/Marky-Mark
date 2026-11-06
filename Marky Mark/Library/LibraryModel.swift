@@ -16,6 +16,8 @@ nonisolated struct LibraryNode: Identifiable, Hashable {
     var children: [LibraryNode]?
     var wordCount: Int
     var keywords: [String]
+    /// Lower-cased targets of `[[wiki links]]` in the file.
+    var links: [String] = []
     var modified: Date
 
     var id: URL { url }
@@ -79,7 +81,8 @@ final class LibraryModel {
         guard let root else { return [] }
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         return root.allFiles.filter { node in
-            if let keyword = selectedKeyword, !node.keywords.contains(keyword) { return false }
+            if let keyword = selectedKeyword,
+               !node.keywords.contains(where: { $0 == keyword || $0.hasPrefix(keyword + "/") }) { return false }
             if query.isEmpty { return true }
             return node.name.lowercased().contains(query) || node.keywords.contains { $0.lowercased().contains(query) }
         }
@@ -128,6 +131,95 @@ final class LibraryModel {
         return [node.url] + (node.children ?? []).flatMap(directories(in:))
     }
 
+    nonisolated private static let tagRegex = try! NSRegularExpression(pattern: #"(?<=^|[\s(,])#([\p{L}\p{N}_/\-]*\p{L}[\p{L}\p{N}_/\-]*)"#, options: [.anchorsMatchLines])
+    nonisolated private static let wikiRegex = try! NSRegularExpression(pattern: #"\[\[([^\]|\n]+)(\|[^\]\n]+)?\]\]"#)
+
+    nonisolated static func inlineTags(in text: String) -> [String] {
+        let ns = text as NSString
+        var tags: [String] = []
+        for match in tagRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            var tag = ns.substring(with: match.range(at: 1))
+            while tag.hasSuffix("/") || tag.hasSuffix("-") { tag.removeLast() }
+            if !tag.isEmpty, !tags.contains(tag) { tags.append(tag) }
+        }
+        return tags
+    }
+
+    nonisolated private static func wikiTargets(in text: String) -> [String] {
+        let ns = text as NSString
+        var targets: [String] = []
+        for match in wikiRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let target = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces).lowercased()
+            if !target.isEmpty, !targets.contains(target) { targets.append(target) }
+        }
+        return targets
+    }
+
+    /// True when the file lives inside the library folder.
+    func contains(_ url: URL) -> Bool {
+        guard let folderURL else { return false }
+        return url.standardizedFileURL.path.hasPrefix(folderURL.standardizedFileURL.path + "/")
+    }
+
+    // MARK: - Links & tags
+
+    /// Sheets whose text links to the given file with `[[its name]]`.
+    func backlinks(to url: URL?) -> [LibraryNode] {
+        guard let url, let root else { return [] }
+        let name = url.deletingPathExtension().lastPathComponent.lowercased()
+        return root.allFiles.filter { $0.url.standardizedFileURL != url.standardizedFileURL && $0.links.contains(name) }
+    }
+
+    /// Sheet names for `[[` autocompletion.
+    func sheetNames(matching partial: String) -> [String] {
+        guard let root else { return [] }
+        let query = partial.trimmingCharacters(in: .whitespaces).lowercased()
+        let names = root.allFiles.map(\.name)
+        let matches = query.isEmpty ? names : names.filter { $0.lowercased().contains(query) }
+        return Array(matches.sorted { a, b in
+            let aPrefix = a.lowercased().hasPrefix(query), bPrefix = b.lowercased().hasPrefix(query)
+            if aPrefix != bPrefix { return aPrefix }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }.prefix(12))
+    }
+
+    /// Keywords arranged by their `/` segments, with the number of sheets under each node.
+    struct TagNode: Identifiable, Hashable {
+        let path: String
+        let name: String
+        var count: Int
+        var children: [TagNode]?
+        var id: String { path }
+    }
+
+    var tagTree: [TagNode] {
+        guard let root else { return [] }
+        var counts: [String: Int] = [:]
+        for file in root.allFiles {
+            var seen: Set<String> = []
+            for keyword in file.keywords {
+                let parts = keyword.split(separator: "/").map(String.init)
+                for depth in 1...max(parts.count, 1) {
+                    let path = parts.prefix(depth).joined(separator: "/")
+                    if seen.insert(path).inserted { counts[path, default: 0] += 1 }
+                }
+            }
+        }
+        func build(prefix: String) -> [TagNode] {
+            let depth = prefix.isEmpty ? 1 : prefix.split(separator: "/").count + 1
+            let paths = counts.keys.filter { path in
+                let parts = path.split(separator: "/")
+                return parts.count == depth && (prefix.isEmpty || path.hasPrefix(prefix + "/"))
+            }
+            return paths.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { path in
+                let children = build(prefix: path)
+                return TagNode(path: path, name: String(path.split(separator: "/").last ?? ""), count: counts[path] ?? 0,
+                               children: children.isEmpty ? nil : children)
+            }
+        }
+        return build(prefix: "")
+    }
+
     nonisolated private static func scan(_ url: URL, depth: Int) -> LibraryNode {
         let fm = FileManager.default
         var children: [LibraryNode] = []
@@ -142,8 +234,11 @@ final class LibraryModel {
                 } else if markdownExtensions.contains(item.pathExtension.lowercased()) {
                     let text = (try? String(contentsOf: item, encoding: .utf8)) ?? ""
                     let words = text.split { $0.isWhitespace || $0.isNewline }.count
+                    var keywords = FrontMatter.keywords(in: text)
+                    for tag in inlineTags(in: text) where !keywords.contains(tag) { keywords.append(tag) }
                     children.append(LibraryNode(url: item, name: item.deletingPathExtension().lastPathComponent, isFolder: false,
-                                                children: nil, wordCount: words, keywords: FrontMatter.keywords(in: text), modified: modified))
+                                                children: nil, wordCount: words, keywords: keywords,
+                                                links: wikiTargets(in: text), modified: modified))
                 }
             }
         }

@@ -38,6 +38,14 @@ enum ExportStyle: String, CaseIterable, Identifiable {
         li.task { list-style: none; margin-left: -1.4em; }
         li.task input { margin-right: 0.5em; }
         a { color: #0a5bd8; }
+        mark { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
+        .tag { color: #0a5bd8; background: rgba(10,91,216,0.08); padding: 0 5px; border-radius: 10px; font-size: 0.92em; }
+        a.wikilink { text-decoration: none; border-bottom: 1px dotted #0a5bd8; }
+        sup.fnref { font-size: 0.75em; line-height: 0; }
+        sup.fnref a { text-decoration: none; }
+        section.footnotes { margin-top: 2.5em; font-size: 0.9em; color: #4a4a4f; }
+        section.footnotes ol { padding-left: 1.4em; }
+        section.footnotes li { margin: 0.3em 0; }
         @media print { body { padding: 0; } a { color: inherit; text-decoration: none; } pre, blockquote, table, img { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } }
         """
         switch self {
@@ -101,6 +109,7 @@ enum HTMLExporter {
     static func body(markdown: String) -> String {
         var out = ""
         var lists: [(tag: String, indent: Int)] = []
+        var footnotes: [(id: String, html: String)] = []
 
         func closeLists(deeperThan indent: Int?) {
             while let top = lists.last, indent == nil || top.indent > indent! {
@@ -162,11 +171,21 @@ enum HTMLExporter {
                     out += "<tr>" + row.map { "<td>\(inline($0))</td>" }.joined() + "</tr>\n"
                 }
                 out += "</tbody>\n</table>\n"
+            case .footnoteDefinition(let id, let text):
+                footnotes.append((id, inline(text)))
             case .blank, .comment, .frontMatter, .unorderedListItem, .orderedListItem, .taskListItem:
                 break
             }
         }
         closeLists(deeperThan: nil)
+        if !footnotes.isEmpty {
+            out += "<section class=\"footnotes\">\n<hr>\n<ol>\n"
+            for note in footnotes {
+                let id = escapeAttribute(note.id)
+                out += "<li id=\"fn-\(id)\">\(note.html) <a href=\"#fnref-\(id)\" class=\"fnback\">\u{21A9}</a></li>\n"
+            }
+            out += "</ol>\n</section>\n"
+        }
         return out
     }
 
@@ -185,6 +204,13 @@ enum HTMLExporter {
             case .strike(let kids): out += "<del>\(render(kids))</del>"
             case .link(let label, let url): out += "<a href=\"\(escapeAttribute(url))\">\(render(label))</a>"
             case .image(let alt, let source): out += "<img src=\"\(escapeAttribute(source))\" alt=\"\(escapeAttribute(alt))\">"
+            case .highlight(let kids): out += "<mark>\(render(kids))</mark>"
+            case .tag(let name): out += "<span class=\"tag\">#\(escape(name))</span>"
+            case .wikiLink(let target, let label):
+                out += "<a class=\"wikilink\" href=\"\(escapeAttribute(target)).html\">\(escape(label ?? target))</a>"
+            case .footnoteRef(let id):
+                let safe = escapeAttribute(id)
+                out += "<sup class=\"fnref\" id=\"fnref-\(safe)\"><a href=\"#fn-\(safe)\">\(escape(id))</a></sup>"
             }
         }
         return out

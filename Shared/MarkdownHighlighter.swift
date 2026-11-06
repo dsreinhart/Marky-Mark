@@ -69,7 +69,7 @@ enum MarkdownHighlighter {
 
             if trimmed.range(of: #"^[-*_]{3,}$"#, options: .regularExpression) != nil {
                 textStorage.addAttributes([.foregroundColor: PlatformColor.systemGray], range: lineRange)
-            } else if trimmed.hasPrefix("#") {
+            } else if trimmed.range(of: #"^#{1,6}(\s|$)"#, options: .regularExpression) != nil {
                 let level = trimmed.prefix(while: { $0 == "#" }).count
                 let scales: [CGFloat] = [1.55, 1.4, 1.25, 1.15, 1.05, 1.0]
                 let headingSize = size * (level <= 6 ? scales[level - 1] : 1.0)
@@ -93,8 +93,16 @@ enum MarkdownHighlighter {
                 color(line, offset: offset, pattern: #"\|"#, color: .systemCyan, font: medium, in: textStorage)
             }
 
+            if trimmed.hasPrefix("[^") {
+                color(line, offset: offset, pattern: #"^\[\^[^\]\s]+\]:"#, color: .systemPurple, font: medium, in: textStorage)
+            }
+
             // Inline styles
             color(line, offset: offset, pattern: #"~~.+?~~"#, color: .systemGray, font: regular, strikethrough: true, in: textStorage)
+            highlightMarks(line, offset: offset, in: textStorage)
+            tags(line, offset: offset, in: textStorage)
+            wikiLinks(line, offset: offset, in: textStorage)
+            color(line, offset: offset, pattern: #"\[\^[^\]\s]+\](?!:)"#, color: .systemPurple, font: medium, in: textStorage)
             color(line, offset: offset, pattern: #"\[[^\]]*\]\([^)]+\)"#, color: .systemBlue, font: regular, underline: true, in: textStorage)
             color(line, offset: offset, pattern: #"!\[[^\]]*\]\([^)]+\)"#, color: .systemIndigo, font: regular, underline: true, in: textStorage)
             color(line, offset: offset, pattern: #"\*\*(.+?)\*\*"#, color: baseColor, font: bold, in: textStorage)
@@ -158,6 +166,40 @@ enum MarkdownHighlighter {
                                     font: font, forGlyphRange: glyphRange)
         }
         return glyphRange.length
+    }
+
+    private static let highlightBackground = PlatformColor.systemYellow.withAlphaComponent(0.35)
+    private static let tagPattern = try! NSRegularExpression(pattern: #"(?<=^|[\s(,])#[\p{L}\p{N}_/\-]*\p{L}[\p{L}\p{N}_/\-]*"#)
+    private static let wikiPattern = try! NSRegularExpression(pattern: #"\[\[([^\]|\n]+)(\|[^\]\n]+)?\]\]"#)
+    private static let markPattern = try! NSRegularExpression(pattern: #"==(?=\S)(.+?)(?<=\S)=="#)
+
+    private static func highlightMarks(_ line: String, offset: Int, in storage: NSTextStorage) {
+        let nsLine = line as NSString
+        for match in markPattern.matches(in: line, range: NSRange(location: 0, length: nsLine.length)) {
+            storage.addAttributes([.backgroundColor: highlightBackground],
+                                  range: NSRange(location: offset + match.range.location, length: match.range.length))
+        }
+    }
+
+    private static func tags(_ line: String, offset: Int, in storage: NSTextStorage) {
+        let nsLine = line as NSString
+        for match in tagPattern.matches(in: line, range: NSRange(location: 0, length: nsLine.length)) {
+            storage.addAttributes([.foregroundColor: PlatformColor.mmAccent],
+                                  range: NSRange(location: offset + match.range.location, length: match.range.length))
+        }
+    }
+
+    /// Wiki links get an internal URL so clicking them can open the sheet.
+    private static func wikiLinks(_ line: String, offset: Int, in storage: NSTextStorage) {
+        let nsLine = line as NSString
+        for match in wikiPattern.matches(in: line, range: NSRange(location: 0, length: nsLine.length)) {
+            let range = NSRange(location: offset + match.range.location, length: match.range.length)
+            let target = nsLine.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: PlatformColor.mmLink,
+                                                        .underlineStyle: NSUnderlineStyle.single.rawValue]
+            if let url = WikiLink.url(for: target) { attrs[.link] = url }
+            storage.addAttributes(attrs, range: range)
+        }
     }
 
     private static func color(_ line: String, offset: Int, pattern: String, color: PlatformColor, font: PlatformFont,

@@ -78,6 +78,50 @@ class MarkyTextView: NSTextView {
         updateInsets()
     }
 
+    /// Supplies sheet names for `[[` autocompletion.
+    var wikiCompletions: ((String) -> [String])?
+
+    /// The partial sheet name typed after an unclosed `[[` on the current line, if any.
+    func wikiPartialRange() -> NSRange? {
+        let selection = selectedRange
+        guard selection.length == 0 else { return nil }
+        return wikiPartialRange(endingAt: selection.location)
+    }
+
+    /// The partial name between an unclosed `[[` on the same line and `location`.
+    private func wikiPartialRange(endingAt location: Int) -> NSRange? {
+        let ns = string as NSString
+        guard location <= ns.length else { return nil }
+        let line = ns.lineRange(for: NSRange(location: location, length: 0))
+        let before = ns.substring(with: NSRange(location: line.location, length: location - line.location)) as NSString
+        let open = before.range(of: "[[", options: .backwards)
+        guard open.location != NSNotFound else { return nil }
+        let partialStart = NSMaxRange(open)
+        let partial = before.substring(from: partialStart)
+        if partial.contains("]]") || partial.contains("[") { return nil }
+        return NSRange(location: line.location + partialStart, length: (partial as NSString).length)
+    }
+
+    override var rangeForUserCompletion: NSRange {
+        wikiPartialRange() ?? super.rangeForUserCompletion
+    }
+
+    override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal: Bool) {
+        guard wikiPartialRange(endingAt: charRange.location) != nil else {
+            super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: isFinal)
+            return
+        }
+        // Commit closes the link; moving through the list just previews the name.
+        let commit = isFinal && movement != NSTextMovement.cancel.rawValue
+        super.insertCompletion(commit ? word + "]]" : word, forPartialWordRange: charRange, movement: movement, isFinal: isFinal)
+    }
+
+    /// Opens the completion list when the insertion point follows an unclosed `[[`.
+    func showWikiCompletionsIfNeeded() {
+        guard wikiCompletions != nil, wikiPartialRange() != nil else { return }
+        complete(nil)
+    }
+
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
         var inset = baseInset

@@ -34,6 +34,8 @@ struct PadDocumentView: View {
     @State private var showFolderAccessPrompt = false
     @State private var showFolderPicker = false
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var linkedSheet: LinkedSheet? = nil
+    @Environment(\.dismiss) private var dismissDocument
     private var theme = ThemeSettings.shared
 
     init(document: Binding<MarkdownFileDocument>, fileURL: URL?) {
@@ -84,10 +86,17 @@ struct PadDocumentView: View {
         }
         .inspector(isPresented: $showDashboard) {
             DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
-                          onJumpToHeading: { controller.jumpToHeading($0) })
+                          onJumpToHeading: { controller.jumpToHeading($0) },
+                          onOpenWikiLink: { target in Task { await openWikiLink(target) } },
+                          onJumpToTag: { tag in controller.jump(toText: "#" + tag) })
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
         }
         .toolbar { toolbarContent }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let target = WikiLink.target(from: url) else { return .systemAction }
+            Task { await openWikiLink(target) }
+            return .handled
+        })
         .sheet(isPresented: $showSettings) {
             NavigationStack {
                 SettingsView()
@@ -103,6 +112,7 @@ struct PadDocumentView: View {
         .sheet(isPresented: $showCheatSheet) { MarkdownCheatSheet() }
         .sheet(isPresented: $showExportPreview) { PadExportPreviewView(markdown: document.text, title: title) }
         .sheet(item: $shareFile) { file in ActivityView(items: [file.url]) }
+        .sheet(item: $linkedSheet) { sheet in LinkedSheetView(sheet: sheet) }
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
@@ -179,6 +189,7 @@ struct PadDocumentView: View {
                     PadExporter.print(markdown: document.text, title: title, style: PadExporter.defaultStyle, from: PadExporter.keyWindowView)
                 }
                 Divider()
+                Button("Recent Files…", systemImage: "clock") { dismissDocument() }
                 Button("Markdown Cheat Sheet", systemImage: "list.bullet.rectangle") { showCheatSheet = true }
                 Button("Settings…", systemImage: "gearshape") { showSettings = true }
             } label: {
@@ -220,6 +231,34 @@ struct PadDocumentView: View {
         do { shareFile = ShareFile(url: try make()) } catch { errorMessage = error.localizedDescription }
     }
 
+    // MARK: - Wiki links
+
+    /// Shows `[[target]]` from the document's folder, creating the file when missing. iPadOS has no
+    /// way to open another document in this window, so it appears as a sheet with an Open in Files button.
+    private func openWikiLink(_ target: String) async {
+        guard let folder = fileURL?.deletingLastPathComponent() else {
+            errorMessage = "Save this document first so links can be resolved next to it."
+            return
+        }
+        PadFolderAccess.begin(folder)
+        let candidates = ["md", "markdown", "txt"].map { folder.appending(path: target + "." + $0) }
+        var url = candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        if url == nil {
+            let created = folder.appending(path: target.replacingOccurrences(of: "/", with: "-") + ".md")
+            do {
+                try ("# " + target + "\n\n").write(to: created, atomically: true, encoding: .utf8)
+                url = created
+            } catch {
+                errorMessage = "No sheet named \u{201C}\(target)\u{201D} here, and the folder isn't writable. Open the folder once via the image button's prompt, or create the sheet in Files."
+                return
+            }
+        }
+        guard let url else { return }
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        linkedSheet = LinkedSheet(url: url, text: text)
+    }
+
+    // MARK: - Images
     // MARK: - Images
 
     private func insertPickedPhoto(_ item: PhotosPickerItem) async {
@@ -271,5 +310,36 @@ struct PadDocumentView: View {
 
     private func insert(_ stored: PadImageStore.Stored) {
         controller.insertBlock("![\(stored.alt)](\(stored.source))")
+    }
+}
+
+
+/// A sheet reached through a wiki link: preview plus a way into Files, where tapping opens it for editing.
+struct LinkedSheet: Identifiable {
+    let url: URL
+    let text: String
+    var id: String { url.path }
+}
+
+struct LinkedSheetView: View {
+    let sheet: LinkedSheet
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            MarkdownPreview(markdown: sheet.text, baseURL: sheet.url)
+                .navigationTitle(sheet.url.deletingPathExtension().lastPathComponent)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Open in Files", systemImage: "folder") {
+                            if let files = URL(string: "shareddocuments://" + sheet.url.path) {
+                                UIApplication.shared.open(files)
+                            }
+                        }
+                    }
+                }
+        }
     }
 }

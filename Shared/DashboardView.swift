@@ -12,21 +12,44 @@ import AppKit
 import UIKit
 #endif
 
+struct BacklinkEntry: Identifiable, Hashable {
+    let url: URL
+    let name: String
+    var id: URL { url }
+}
+
 struct DashboardView: View {
     @Binding var text: String
     let goalKey: String
     let fileURL: URL?
     let onJumpToHeading: (Int) -> Void
+    /// Sheets that link here; nil hides the section (no library on this platform).
+    let backlinks: [BacklinkEntry]?
+    let onOpenBacklink: (URL) -> Void
+    /// Follows a `[[wiki link]]` from the Links list.
+    let onOpenWikiLink: ((String) -> Void)?
+    /// Filters the library by a tag (Mac): keyword chips on click, inline tags from their context menu.
+    let onSelectTag: ((String) -> Void)?
+    /// Moves the cursor to the next `#tag` in the text when an inline tag chip is clicked.
+    let onJumpToTag: ((String) -> Void)?
 
     @State private var showGoalEditor = false
     @State private var newKeyword = ""
     private var goalStore = GoalStore.shared
 
-    init(text: Binding<String>, goalKey: String, fileURL: URL?, onJumpToHeading: @escaping (Int) -> Void) {
+    init(text: Binding<String>, goalKey: String, fileURL: URL?, onJumpToHeading: @escaping (Int) -> Void,
+         backlinks: [BacklinkEntry]? = nil, onOpenBacklink: @escaping (URL) -> Void = { _ in },
+         onOpenWikiLink: ((String) -> Void)? = nil, onSelectTag: ((String) -> Void)? = nil,
+         onJumpToTag: ((String) -> Void)? = nil) {
         _text = text
         self.goalKey = goalKey
         self.fileURL = fileURL
         self.onJumpToHeading = onJumpToHeading
+        self.backlinks = backlinks
+        self.onOpenBacklink = onOpenBacklink
+        self.onOpenWikiLink = onOpenWikiLink
+        self.onSelectTag = onSelectTag
+        self.onJumpToTag = onJumpToTag
     }
 
     private var stats: TextStatistics { TextStatistics.compute(markdown: text) }
@@ -43,6 +66,7 @@ struct DashboardView: View {
                 goalSection
                 outlineSection
                 keywordsSection
+                if backlinks != nil { backlinksSection }
                 attachmentsSection
             }
             .padding(14)
@@ -175,9 +199,21 @@ struct DashboardView: View {
             if !keywords.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(keywords, id: \.self) { keyword in
-                        KeywordChip(text: keyword) {
+                        KeywordChip(text: keyword, onTap: onSelectTag.map { select in { select(keyword) } }) {
                             setKeywords(keywords.filter { $0 != keyword })
                         }
+                    }
+                }
+            }
+            let inlineTags = TextStatistics.inlineTags(markdown: text).filter { !keywords.contains($0) }
+            if !inlineTags.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(inlineTags, id: \.self) { tag in
+                        KeywordChip(text: "#" + tag, onTap: (onJumpToTag ?? onSelectTag).map { act in { act(tag) } })
+                            .contextMenu {
+                                if let onJumpToTag { Button("Jump to Tag") { onJumpToTag(tag) } }
+                                if let onSelectTag { Button("Filter Library by Tag") { onSelectTag(tag) } }
+                            }
                     }
                 }
             }
@@ -190,9 +226,37 @@ struct DashboardView: View {
                     if !keywords.contains(value) { setKeywords(keywords + [value]) }
                     newKeyword = ""
                 }
-            Text("Stored as `tags` in the document's front matter; the library can filter by them.")
+            Text(tagHelp)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Backlinks
+
+    private var backlinksSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionTitle("Backlinks")
+            let entries = backlinks ?? []
+            if entries.isEmpty {
+                Text("No other sheet links here yet. Link with [[\(fileURL?.deletingPathExtension().lastPathComponent ?? "Sheet name")]].")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(entries) { entry in
+                    Button {
+                        onOpenBacklink(entry.url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.turn.up.left").foregroundStyle(.secondary).frame(width: 16)
+                            Text(entry.name).font(.callout).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -210,7 +274,7 @@ struct DashboardView: View {
                         open(entry)
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: entry.kind == .image ? "photo" : "link")
+                            Image(systemName: entry.kind == .image ? "photo" : (entry.kind == .wikiLink ? "doc.text" : "link"))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 16)
                             VStack(alignment: .leading, spacing: 1) {
@@ -227,7 +291,19 @@ struct DashboardView: View {
         }
     }
 
+    private var tagHelp: String {
+        var parts: [String] = []
+        if onJumpToTag != nil { parts.append("Click a #tag to jump to it in the text.") }
+        if onSelectTag != nil { parts.append(onJumpToTag == nil ? "Click a tag to filter the library by it." : "Click a keyword, or right-click a #tag, to filter the library by it.") }
+        parts.append("Keywords are stored as `tags` in the front matter; `#tags` typed in the text count too.")
+        return parts.joined(separator: " ")
+    }
+
     private func open(_ entry: AttachmentEntry) {
+        if entry.kind == .wikiLink {
+            onOpenWikiLink?(entry.target)
+            return
+        }
         if let url = URL(string: entry.target), url.scheme != nil {
             #if canImport(AppKit)
             NSWorkspace.shared.open(url)
@@ -273,11 +349,16 @@ private struct StatTile: View {
 
 struct KeywordChip: View {
     let text: String
+    var onTap: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(text).font(.caption)
+            if let onTap {
+                Button(action: onTap) { Text(text).font(.caption) }.buttonStyle(.plain)
+            } else {
+                Text(text).font(.caption)
+            }
             if let onRemove {
                 Button(action: onRemove) {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold))

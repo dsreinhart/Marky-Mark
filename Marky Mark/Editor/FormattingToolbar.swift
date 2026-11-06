@@ -38,6 +38,7 @@ struct FormattingToolbar: View {
             ToolButton(symbol: "italic", help: "Italic (⌘I)", active: state.italic) { controller.toggleItalic() }
             ToolButton(symbol: "strikethrough", help: "Strikethrough (⌘⇧X)", active: state.strike) { controller.toggleStrikethrough() }
             ToolButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Inline Code (⌘E)", active: state.code) { controller.toggleInlineCode() }
+            ToolButton(symbol: "highlighter", help: "Highlight (⌘⇧H)", active: state.highlight) { controller.toggleHighlight() }
             separator
 
             ToolButton(symbol: "link", help: state.hasLink ? "Remove Link (⌘K)" : "Insert Link (⌘K)", active: state.hasLink) {
@@ -47,6 +48,7 @@ struct FormattingToolbar: View {
 
             ToolButton(symbol: "photo", help: "Insert Image") { controller.requestImage() }
                 .popover(isPresented: $controller.showImagePopover, arrowEdge: .bottom) { imagePopover }
+            ToolButton(symbol: "textformat.superscript", help: "Insert Footnote (⌥⇧⌘F)") { controller.insertFootnote() }
             separator
 
             ToolButton(symbol: "list.bullet", help: "Bulleted List (⌘⇧8)", active: isKind(.bullet)) { controller.toggleBulletList() }
@@ -66,6 +68,9 @@ struct FormattingToolbar: View {
 
             ToolButton(symbol: "increase.indent", help: "Increase Indent (⌘])", disabled: !state.blockKind.isList) { controller.increaseIndent() }
             ToolButton(symbol: "decrease.indent", help: "Decrease Indent (⌘[)", disabled: !state.blockKind.isList || state.indent == 0) { controller.decreaseIndent() }
+            separator
+            ToolButton(symbol: state.folded ? "rectangle.expand.vertical" : "rectangle.compress.vertical",
+                       help: state.folded ? "Unfold Section (⌥⌘←)" : "Fold Section (⌥⌘←)", active: state.folded) { controller.toggleFold() }
 
             Spacer(minLength: 0)
         }
@@ -98,6 +103,7 @@ struct FormattingToolbar: View {
         case .tableCell: return "Table Cell"
         case .comment: return "Comment"
         case .frontMatter: return "Metadata"
+        case .footnote: return "Footnote"
         }
     }
 

@@ -137,6 +137,17 @@ struct FileCommands: Commands {
             }
             .keyboardShortcut("o", modifiers: .command)
 
+            Menu("Open Recent") {
+                ForEach(store.recents) { entry in
+                    Button(entry.name) { store.openRecent(entry) }
+                        .help(entry.url.path)
+                }
+                if !store.recents.isEmpty {
+                    Divider()
+                    Button("Clear Menu") { store.clearRecents() }
+                }
+            }
+
             Button("Quick Open…") {
                 uiState?.showQuickOpen = true
             }
@@ -250,8 +261,12 @@ struct FormatCommands: Commands {
                 .keyboardShortcut("x", modifiers: [.command, .shift])
             Button("Inline Code") { controller?.toggleInlineCode() }
                 .keyboardShortcut("e", modifiers: .command)
+            Button("Highlight") { controller?.toggleHighlight() }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
             Button("Link…") { controller?.requestLink() }
                 .keyboardShortcut("k", modifiers: .command)
+            Button("Footnote") { controller?.insertFootnote() }
+                .keyboardShortcut("f", modifiers: [.command, .shift, .option])
 
             Divider()
 
@@ -289,6 +304,13 @@ struct FormatCommands: Commands {
                 .keyboardShortcut("]", modifiers: .command)
             Button("Decrease Indent") { controller?.decreaseIndent() }
                 .keyboardShortcut("[", modifiers: .command)
+
+            Divider()
+
+            Button("Fold or Unfold Section") { controller?.toggleFold() }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            Button("Unfold All Sections") { controller?.unfoldAll() }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option, .shift])
             }
             .disabled(!isActive)
         }

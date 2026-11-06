@@ -18,6 +18,11 @@ nonisolated indirect enum InlineNode: Equatable {
     case strike([InlineNode])
     case link(label: [InlineNode], url: String)
     case image(alt: String, source: String)
+    case highlight([InlineNode])
+    /// `#tag` or `#nested/tag`; the stored string has no leading `#`.
+    case tag(String)
+    case wikiLink(target: String, label: String?)
+    case footnoteRef(String)
 }
 
 nonisolated struct InlineParser {
@@ -82,6 +87,30 @@ nonisolated struct InlineParser {
                 }
                 continue
             }
+            if c == "[", i + 1 < n, chars[i + 1] == "[" {
+                if let (node, end) = parseWikiLink(at: i) {
+                    flushText()
+                    tokens.append(.node(node))
+                    i = end
+                    continue
+                }
+            }
+            if c == "[", i + 1 < n, chars[i + 1] == "^" {
+                if let (node, end) = parseFootnoteRef(at: i) {
+                    flushText()
+                    tokens.append(.node(node))
+                    i = end
+                    continue
+                }
+            }
+            if c == "#" {
+                if let (node, end) = parseTag(at: i) {
+                    flushText()
+                    tokens.append(.node(node))
+                    i = end
+                    continue
+                }
+            }
             if c == "[" || (c == "!" && i + 1 < n && chars[i + 1] == "[") {
                 if let (node, end) = parseLinkOrImage(at: i) {
                     flushText()
@@ -93,12 +122,12 @@ nonisolated struct InlineParser {
                 i += 1
                 continue
             }
-            if c == "*" || c == "_" || c == "~" {
+            if c == "*" || c == "_" || c == "~" || c == "=" {
                 var j = i
                 while j < n, chars[j] == c { j += 1 }
                 let count = j - i
-                if c == "~" && count != 2 {
-                    textBuffer.append(String(repeating: "~", count: count))
+                if (c == "~" || c == "=") && count != 2 {
+                    textBuffer.append(String(repeating: String(c), count: count))
                     i = j
                     continue
                 }
@@ -202,6 +231,60 @@ nonisolated struct InlineParser {
         return (.link(label: InlineParser.parse(label), url: dest), end)
     }
 
+    /// `[[Target]]` or `[[Target|Label]]`.
+    private func parseWikiLink(at start: Int) -> (InlineNode, Int)? {
+        let n = chars.count
+        var i = start + 2
+        let innerStart = i
+        while i + 1 < n {
+            if chars[i] == "]" && chars[i + 1] == "]" { break }
+            if chars[i] == "\n" || chars[i] == "[" { return nil }
+            i += 1
+        }
+        guard i + 1 < n else { return nil }
+        let inner = String(chars[innerStart..<i])
+        let parts = inner.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let target = parts[0].trimmingCharacters(in: .whitespaces)
+        guard !target.isEmpty else { return nil }
+        var label: String? = nil
+        if parts.count == 2 {
+            let l = parts[1].trimmingCharacters(in: .whitespaces)
+            if !l.isEmpty { label = l }
+        }
+        return (.wikiLink(target: target, label: label), i + 2)
+    }
+
+    /// `[^id]` (a reference; definitions are handled at block level).
+    private func parseFootnoteRef(at start: Int) -> (InlineNode, Int)? {
+        let n = chars.count
+        var i = start + 2
+        let idStart = i
+        while i < n, chars[i] != "]" {
+            if Self.isWhitespace(chars[i]) || chars[i] == "[" { return nil }
+            i += 1
+        }
+        guard i < n, i > idStart else { return nil }
+        if i + 1 < n, chars[i + 1] == ":", start == 0 || chars[start - 1] == "\n" { return nil }
+        return (.footnoteRef(String(chars[idStart..<i])), i + 1)
+    }
+
+    /// `#tag` preceded by whitespace or the start of the text, containing at least one letter.
+    private func parseTag(at start: Int) -> (InlineNode, Int)? {
+        let n = chars.count
+        if start > 0 {
+            let prev = chars[start - 1]
+            guard Self.isWhitespace(prev) || prev == "(" || prev == "," else { return nil }
+        }
+        var i = start + 1
+        while i < n, WikiLink.isTagCharacter(chars[i]) { i += 1 }
+        var end = i
+        while end > start + 1, chars[end - 1] == "/" || chars[end - 1] == "-" { end -= 1 }
+        guard end > start + 1 else { return nil }
+        let name = String(chars[(start + 1)..<end])
+        guard name.contains(where: { $0.isLetter }) else { return nil }
+        return (.tag(name), end)
+    }
+
     // MARK: - Emphasis (CommonMark "process emphasis")
 
     private mutating func processEmphasis() {
@@ -218,7 +301,7 @@ nonisolated struct InlineParser {
                 if case .delimiter(let opener) = tokens[openerIndex],
                    opener.char == closer.char, opener.canOpen {
                     // Rule of three for * and _.
-                    let ruleOfThree = (opener.char != "~")
+                    let ruleOfThree = (opener.char != "~" && opener.char != "=")
                         && (opener.canClose || closer.canOpen)
                         && (opener.originalCount + closer.originalCount) % 3 == 0
                         && !(opener.originalCount % 3 == 0 && closer.originalCount % 3 == 0)
@@ -237,7 +320,7 @@ nonisolated struct InlineParser {
             }
 
             let use: Int
-            if closer.char == "~" {
+            if closer.char == "~" || closer.char == "=" {
                 use = 2
             } else {
                 use = (opener.count >= 2 && closerDelim.count >= 2) ? 2 : 1
@@ -246,6 +329,7 @@ nonisolated struct InlineParser {
             let node: InlineNode
             switch (closer.char, use) {
             case ("~", _): node = .strike(inner)
+            case ("=", _): node = .highlight(inner)
             case (_, 2): node = .strong(inner)
             default: node = .emphasis(inner)
             }

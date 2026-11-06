@@ -15,7 +15,7 @@ struct OutlineEntry: Identifiable, Hashable {
 }
 
 struct AttachmentEntry: Identifiable, Hashable {
-    enum Kind { case image, link }
+    enum Kind { case image, link, wikiLink }
     let id: Int
     let kind: Kind
     let label: String
@@ -58,6 +58,9 @@ struct TextStatistics {
                 parts.append(code)
             case .table(let headers, let rows):
                 parts.append((headers + rows.flatMap { $0 }).map(plain).joined(separator: " "))
+            case .footnoteDefinition(_, let text):
+                stats.paragraphs += 1
+                parts.append(plain(text))
             case .horizontalRule, .blank, .comment, .frontMatter:
                 break
             }
@@ -82,14 +85,81 @@ struct TextStatistics {
             for node in nodes {
                 switch node {
                 case .text(let s), .code(let s): out += s
-                case .emphasis(let kids), .strong(let kids), .strike(let kids): walk(kids)
+                case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids): walk(kids)
                 case .link(let label, _): walk(label)
                 case .image(let alt, _): out += alt
+                case .tag(let name): out += "#" + name
+                case .wikiLink(let target, let label): out += label ?? target
+                case .footnoteRef: break
                 }
             }
         }
         walk(InlineParser.parse(inline))
         return out
+    }
+
+    /// Inline `#tags` in the document, in order of first appearance (nested as "a/b").
+    static func inlineTags(markdown: String) -> [String] {
+        var tags: [String] = []
+        func walk(_ nodes: [InlineNode]) {
+            for node in nodes {
+                switch node {
+                case .tag(let name): if !tags.contains(name) { tags.append(name) }
+                case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids), .link(let kids, _): walk(kids)
+                default: break
+                }
+            }
+        }
+        forEachInlineText(markdown: markdown) { walk(InlineParser.parse($0)) }
+        return tags
+    }
+
+    /// Targets of `[[wiki links]]` in the document, in order of first appearance.
+    static func wikiLinks(markdown: String) -> [String] {
+        var targets: [String] = []
+        func walk(_ nodes: [InlineNode]) {
+            for node in nodes {
+                switch node {
+                case .wikiLink(let target, _): if !targets.contains(target) { targets.append(target) }
+                case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids), .link(let kids, _): walk(kids)
+                default: break
+                }
+            }
+        }
+        forEachInlineText(markdown: markdown) { walk(InlineParser.parse($0)) }
+        return targets
+    }
+
+    /// Ids of footnote references and definitions, as they appear.
+    static func footnoteIDs(markdown: String) -> [String] {
+        var ids: [String] = []
+        func walk(_ nodes: [InlineNode]) {
+            for node in nodes {
+                switch node {
+                case .footnoteRef(let id): if !ids.contains(id) { ids.append(id) }
+                case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids), .link(let kids, _): walk(kids)
+                default: break
+                }
+            }
+        }
+        for block in MarkdownParser.parse(markdown) {
+            if case .footnoteDefinition(let id, _) = block, !ids.contains(id) { ids.append(id) }
+        }
+        forEachInlineText(markdown: markdown) { walk(InlineParser.parse($0)) }
+        return ids
+    }
+
+    private static func forEachInlineText(markdown: String, _ body: (String) -> Void) {
+        for block in MarkdownParser.parse(markdown) {
+            switch block {
+            case .heading(_, let t), .paragraph(let t): body(t)
+            case .unorderedListItem(let t, _), .orderedListItem(_, let t, _), .taskListItem(_, let t, _): body(t)
+            case .blockquote(let t): t.components(separatedBy: "\n").forEach(body)
+            case .table(let headers, let rows): (headers + rows.flatMap { $0 }).forEach(body)
+            case .footnoteDefinition(_, let t): body(t)
+            default: break
+            }
+        }
     }
 
     static func outline(markdown: String) -> [OutlineEntry] {
@@ -111,8 +181,10 @@ struct TextStatistics {
                     entries.append(AttachmentEntry(id: entries.count, kind: .image, label: alt.isEmpty ? source : alt, target: source))
                 case .link(let label, let url):
                     entries.append(AttachmentEntry(id: entries.count, kind: .link, label: plainNodes(label), target: url))
-                case .emphasis(let kids), .strong(let kids), .strike(let kids): walk(kids)
-                case .text, .code: break
+                case .wikiLink(let target, let label):
+                    entries.append(AttachmentEntry(id: entries.count, kind: .wikiLink, label: label ?? target, target: target))
+                case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids): walk(kids)
+                case .text, .code, .tag, .footnoteRef: break
                 }
             }
         }
@@ -134,8 +206,11 @@ struct TextStatistics {
         for node in nodes {
             switch node {
             case .text(let s), .code(let s): out += s
-            case .emphasis(let kids), .strong(let kids), .strike(let kids), .link(let kids, _): out += plainNodes(kids)
+            case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids), .link(let kids, _): out += plainNodes(kids)
             case .image(let alt, _): out += alt
+            case .tag(let name): out += "#" + name
+            case .wikiLink(let target, let label): out += label ?? target
+            case .footnoteRef: break
             }
         }
         return out

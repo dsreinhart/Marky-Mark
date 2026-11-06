@@ -105,6 +105,10 @@ struct MarkdownRenderer {
                 let info = BlockInfo(.frontMatter)
                 _ = counter.next(for: info)
                 result.append(codeParagraph(info, code: text))
+            case .footnoteDefinition(let id, let text):
+                let info = BlockInfo(.footnote(id: id))
+                _ = counter.next(for: info)
+                result.append(listItem(info, number: 1, text: text))
             }
         }
         return result
@@ -216,6 +220,26 @@ struct MarkdownRenderer {
                                             base: style, isHeaderCell: isHeaderCell))
             case .image(let alt, let source):
                 out.append(imageAttachment(alt: alt, source: source, block: block, paragraphStyle: paragraphStyle))
+            case .highlight(let children):
+                var style = base
+                style.highlight = true
+                out.append(inlineAttributed(children, block: block, paragraphStyle: paragraphStyle,
+                                            base: style, isHeaderCell: isHeaderCell))
+            case .tag(let name):
+                var style = base
+                style.tag = true
+                out.append(NSAttributedString(string: "#" + name, attributes: engine.attributes(
+                    block: block, inline: style, paragraphStyle: paragraphStyle, isHeaderCell: isHeaderCell)))
+            case .wikiLink(let target, let label):
+                var style = base
+                style.wikiLink = target
+                out.append(NSAttributedString(string: label ?? target, attributes: engine.attributes(
+                    block: block, inline: style, paragraphStyle: paragraphStyle, isHeaderCell: isHeaderCell)))
+            case .footnoteRef(let id):
+                var style = base
+                style.footnoteRef = id
+                out.append(NSAttributedString(string: id, attributes: engine.attributes(
+                    block: block, inline: style, paragraphStyle: paragraphStyle, isHeaderCell: isHeaderCell)))
             }
         }
         return out

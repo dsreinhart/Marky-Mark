@@ -150,7 +150,19 @@ struct ContentView: View {
             if viewSettings.showDashboard && !uiState.isComposing {
                 Divider()
                 DashboardView(text: $document.text, goalKey: document.goalKey, fileURL: document.fileURL,
-                              onJumpToHeading: { controller.jumpToHeading?($0) })
+                              onJumpToHeading: { controller.jumpToHeading?($0) },
+                              backlinks: currentBacklinks,
+                              onOpenBacklink: { url in
+                                  let store = DocumentStore.shared
+                                  if let linked = store.openDocument(at: url) { store.show(linked) }
+                              },
+                              onOpenWikiLink: { target in WikiLinkResolver.open(target, near: document.fileURL) },
+                              onSelectTag: { tag in
+                                  LibraryModel.shared.selectedKeyword = tag
+                                  LibraryModel.shared.searchText = ""
+                                  viewSettings.showLibrary = true
+                              },
+                              onJumpToTag: { tag in controller.jump(toText: "#" + tag) })
                     .frame(width: 270)
             }
         }
@@ -207,6 +219,9 @@ struct ContentView: View {
         .onChange(of: document.text) { _, _ in
             document.textDidChange()
         }
+        .onChange(of: document.fileURL, initial: true) { _, url in
+            controller.documentURL = url
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
             document.autosaveNow()
         }
@@ -214,6 +229,29 @@ struct ContentView: View {
         .focusedSceneValue(\.richEditorController, controller)
         .focusedSceneValue(\.document, document)
         .focusedSceneValue(\.windowUIState, uiState)
+    }
+
+    // MARK: - Backlinks
+
+    /// Sheets linking here: from the library index plus the live text of open tabs
+    /// (which may not be saved or indexed yet).
+    private var currentBacklinks: [BacklinkEntry] {
+        guard let url = document.fileURL else { return [] }
+        let name = url.deletingPathExtension().lastPathComponent.lowercased()
+        var seen: Set<String> = []
+        var entries: [BacklinkEntry] = []
+        for other in DocumentStore.shared.documents where other !== document {
+            guard let otherURL = other.fileURL else { continue }
+            let targets = TextStatistics.wikiLinks(markdown: other.text).map { $0.lowercased() }
+            guard targets.contains(name), seen.insert(otherURL.standardizedFileURL.path).inserted else { continue }
+            entries.append(BacklinkEntry(url: otherURL, name: otherURL.deletingPathExtension().lastPathComponent))
+        }
+        for node in LibraryModel.shared.backlinks(to: url) where seen.insert(node.url.standardizedFileURL.path).inserted {
+            // Skip open documents whose live text no longer links here.
+            if DocumentStore.shared.document(for: node.url) != nil { continue }
+            entries.append(BacklinkEntry(url: node.url, name: node.name))
+        }
+        return entries
     }
 
     // MARK: - Status bar

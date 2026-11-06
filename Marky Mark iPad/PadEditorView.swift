@@ -326,6 +326,42 @@ final class PadEditorController {
         textView.becomeFirstResponder()
     }
 
+    /// Selects the next occurrence of `needle` after the cursor (wrapping) and scrolls to it.
+    func jump(toText needle: String) {
+        guard let textView, !needle.isEmpty else { return }
+        let ns = textView.text as NSString
+        let start = min(NSMaxRange(textView.selectedRange), ns.length)
+        var found = ns.range(of: needle, options: [], range: NSRange(location: start, length: ns.length - start))
+        if found.location == NSNotFound { found = ns.range(of: needle) }
+        guard found.location != NSNotFound else { return }
+        textView.selectedRange = found
+        textView.scrollRangeToVisible(found)
+        textView.becomeFirstResponder()
+    }
+
+    /// Inserts `[^n]` at the cursor and a matching `[^n]: ` definition at the end of the document.
+    func insertFootnote() {
+        guard let textView else { return }
+        let text = currentText
+        var maxID = 0
+        if let regex = try? NSRegularExpression(pattern: #"\[\^(\d+)\]"#) {
+            for match in regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
+                maxID = max(maxID, Int(text.substring(with: match.range(at: 1))) ?? 0)
+            }
+        }
+        let id = String(maxID + 1)
+        let at = NSRange(location: NSMaxRange(textView.selectedRange), length: 0)
+        replace(at, with: "[^\(id)]", selecting: NSRange(location: at.location + id.count + 3, length: 0))
+        let updated = currentText
+        var tail = "\n\n[^\(id)]: "
+        if updated.length > 0 {
+            let lastLine = updated.substring(from: updated.lineRange(for: NSRange(location: updated.length - 1, length: 0)).location)
+            if lastLine.hasPrefix("[^") || updated.character(at: updated.length - 1) == 0x0A { tail = "\n[^\(id)]: " }
+        }
+        let end = NSRange(location: updated.length, length: 0)
+        replace(end, with: tail, selecting: NSRange(location: updated.length + (tail as NSString).length, length: 0))
+    }
+
     /// Flips the nth task checkbox in the document.
     func toggleTask(_ index: Int) {
         let text = currentText

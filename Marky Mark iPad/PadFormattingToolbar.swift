@@ -33,9 +33,12 @@ struct PadFormattingToolbar: View {
                 tool("italic", "Italic") { controller.wrap(prefix: "*", suffix: "*", placeholder: "italic") }
                 tool("strikethrough", "Strikethrough") { controller.wrap(prefix: "~~", suffix: "~~", placeholder: "struck") }
                 tool("chevron.left.forwardslash.chevron.right", "Inline code") { controller.wrap(prefix: "`", suffix: "`", placeholder: "code") }
+                tool("highlighter", "Highlight") { controller.wrap(prefix: "==", suffix: "==", placeholder: "highlight") }
                 separator
 
                 tool("link", "Link") { controller.wrap(prefix: "[", suffix: "](https://)", placeholder: "link text") }
+                tool("link.badge.plus", "Wiki link to another sheet") { controller.wrap(prefix: "[[", suffix: "]]", placeholder: "Sheet name") }
+                tool("textformat.superscript", "Footnote") { controller.insertFootnote() }
                 Menu {
                     Button("Photo Library…", systemImage: "photo.on.rectangle", action: onPickPhoto)
                     Button("Choose File…", systemImage: "folder", action: onPickFile)

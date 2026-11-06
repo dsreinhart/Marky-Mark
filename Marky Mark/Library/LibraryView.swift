@@ -30,7 +30,7 @@ struct LibraryView: View {
                 emptyState
             } else {
                 searchField
-                if !library.allKeywords.isEmpty { keywordFilter }
+                if !library.tagTree.isEmpty { tagFilter }
                 Divider()
                 list
             }
@@ -117,21 +117,32 @@ struct LibraryView: View {
         .padding(.vertical, 6)
     }
 
-    private var keywordFilter: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(library.allKeywords, id: \.self) { keyword in
-                    Button {
-                        library.selectedKeyword = library.selectedKeyword == keyword ? nil : keyword
-                    } label: {
-                        Text(keyword)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(library.selectedKeyword == keyword ? Color.accentColor : Color.accentColor.opacity(0.15)))
-                            .foregroundStyle(library.selectedKeyword == keyword ? Color.white : Color.primary)
+    @AppStorage("library.tagsExpanded") private var tagsExpanded = true
+
+    private var tagFilter: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DisclosureGroup(isExpanded: $tagsExpanded) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        TagRows(nodes: library.tagTree, depth: 0, selected: library.selectedKeyword) { path in
+                            library.selectedKeyword = library.selectedKeyword == path ? nil : path
+                        }
                     }
-                    .buttonStyle(.plain)
+                }
+                .frame(maxHeight: 180)
+            } label: {
+                HStack {
+                    Text("Tags").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    if let selected = library.selectedKeyword {
+                        Spacer()
+                        Button {
+                            library.selectedKeyword = nil
+                        } label: {
+                            Label("Clear #\(selected)", systemImage: "xmark.circle.fill").labelStyle(.titleAndIcon).font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -205,6 +216,39 @@ struct LibraryView: View {
         let store = DocumentStore.shared
         if let document = store.openDocument(at: url) {
             store.show(document)
+        }
+    }
+}
+
+
+/// Indented rows of the nested tag tree.
+private struct TagRows: View {
+    let nodes: [LibraryModel.TagNode]
+    let depth: Int
+    let selected: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ForEach(nodes) { node in
+            Button {
+                onSelect(node.path)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "number").font(.caption2).foregroundStyle(.secondary)
+                    Text(node.name).font(.callout).lineLimit(1)
+                    Spacer()
+                    Text("\(node.count)").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 3)
+                .padding(.leading, CGFloat(depth) * 14 + 4)
+                .padding(.trailing, 6)
+                .background(RoundedRectangle(cornerRadius: 5).fill(selected == node.path ? Color.accentColor.opacity(0.18) : Color.clear))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let children = node.children {
+                TagRows(nodes: children, depth: depth + 1, selected: selected, onSelect: onSelect)
+            }
         }
     }
 }

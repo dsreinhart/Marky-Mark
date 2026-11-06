@@ -63,13 +63,15 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         textView.layoutManager?.allowsNonContiguousLayout = false
 
         textView.delegate = context.coordinator
+        textView.layoutManager?.delegate = context.coordinator
+        textView.wikiCompletions = { partial in LibraryModel.shared.sheetNames(matching: partial) }
         scrollView.documentView = textView
 
         context.coordinator.textView = textView
         context.coordinator.baseURL = baseURL
         context.coordinator.load(text)
         controller.coordinator = context.coordinator
-        controller.isActive = true
+        controller.refreshActive()
         controller.jumpToHeading = { [weak coordinator = context.coordinator] index in coordinator?.jumpToHeading(index) }
         controller.splitAtCursor = { [weak coordinator = context.coordinator] in coordinator?.splitAtCursor() }
         return scrollView
@@ -98,7 +100,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         if coordinator.parent.controller.coordinator === coordinator {
             coordinator.parent.controller.coordinator = nil
-            coordinator.parent.controller.isActive = false
+            coordinator.parent.controller.refreshActive()
         }
     }
 
@@ -156,6 +158,10 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         private var normalizationEdits = 0
         /// Typing attributes chosen with an empty selection (e.g. ⌘B before typing); kept until the cursor moves.
         private var typingOverride: (location: Int, attributes: [NSAttributedString.Key: Any])? = nil
+        /// Paragraph start locations of headings whose sections are folded.
+        private var foldedHeadings: Set<Int> = []
+        /// Character ranges currently hidden by folding (paragraph aligned).
+        private(set) var foldedRanges: [NSRange] = []
 
         init(_ parent: RichMarkdownEditorView) {
             self.parent = parent
@@ -176,6 +182,8 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             renumberOrderedLists()
             isLoading = false
             textView.undoManager?.removeAllActions()
+            foldedHeadings = []
+            foldedRanges = []
             textView.selectedRange = NSRange(location: 0, length: 0)
             textView.typingAttributes = typingAttributes(at: 0)
             lastKnownText = markdown
@@ -430,6 +438,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             let newLength = replacementString?.utf16.count ?? affectedCharRange.length
             let edited = NSRange(location: affectedCharRange.location, length: max(newLength, affectedCharRange.length))
             pendingEditedRange = pendingEditedRange.map { NSUnionRange($0, edited) } ?? edited
+            if replacementString != nil, !foldedHeadings.isEmpty {
+                shiftFoldedHeadings(for: affectedCharRange, newLength: newLength)
+            }
             if let replacementString {
                 lastChangeWasTyping = affectedCharRange.length == 0
                     && !replacementString.isEmpty
@@ -474,6 +485,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                       willChangeSelectionFromCharacterRange oldSelectedCharRange: NSRange,
                       toCharacterRange newSelectedCharRange: NSRange) -> NSRange {
             guard !isLoading, length > 0 else { return newSelectedCharRange }
+            unfoldIfNeeded(for: newSelectedCharRange)
             var range = newSelectedCharRange
             let paragraph = paragraphRange(at: range.location)
             let contentStart = paragraph.location + markerLength(ofParagraph: paragraph)
@@ -500,6 +512,19 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 }
             }
             return range
+        }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL, let target = WikiLink.target(from: url) else { return false }
+            WikiLinkResolver.open(target, near: baseURL)
+            return true
+        }
+
+        func textView(_ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange,
+                      indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+            guard let marky = textView as? MarkyTextView, marky.wikiPartialRange() != nil else { return words }
+            let partial = (textView.string as NSString).substring(with: charRange)
+            return marky.wikiCompletions?(partial) ?? []
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -566,6 +591,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             renumberOrderedLists()
             if spanned { removeEmptyLeftoverParagraph() }
             if wasTyping { applyMarkdownShortcuts() }
+            if !foldedHeadings.isEmpty { recomputeFolds() }
 
             if spanned || normalizationEdits > 0 {
                 // Text blocks and paragraph spacing changed; re-lay the rest of the document.
@@ -575,6 +601,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             textView.needsDisplay = true
             publish()
             refreshState()
+            if wasTyping { textView.showWikiCompletionsIfNeeded() }
             if textView.options.focus != .off {
                 EditorBehaviors.applyFocus(textView, mode: textView.options.focus,
                                            dimColor: engine.style.textColor.withAlphaComponent(0.28))
@@ -639,7 +666,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 paragraph.length -= run.length
             }
 
-            if block.isList {
+            if block.hasMarker {
                 if let leadingMarker {
                     if !markerIsValid(leadingMarker, for: block) {
                         let marker = engine.marker(for: block, number: 1)
@@ -656,8 +683,88 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 paragraph.length -= leadingMarker.length
             }
 
+            paragraph = convertInlineTokens(in: paragraph, block: block)
+            normalizeTags(in: paragraph, block: block)
             restyleParagraph(paragraph, block: block)
             return paragraph
+        }
+
+        private static let wikiTokenPattern = try! NSRegularExpression(pattern: #"\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]"#)
+        private static let footnoteTokenPattern = try! NSRegularExpression(pattern: #"\[\^([^\]\s]+)\](?!:)"#)
+
+        /// Literal `[[Name]]` / `[[Name|Label]]` / `[^id]` typed or pasted into a paragraph become
+        /// proper link runs. Returns the paragraph's new range.
+        private func convertInlineTokens(in paragraphIn: NSRange, block: BlockInfo) -> NSRange {
+            guard let storage, !block.kind.isPlainText else { return paragraphIn }
+            var paragraph = paragraphIn
+            let content = contentRange(ofParagraph: paragraph)
+            guard content.length >= 4 else { return paragraph }
+            let text = nsString.substring(with: content)
+            let full = NSRange(location: 0, length: (text as NSString).length)
+            let table = tableBlock(forParagraph: paragraph)
+            let ps = table != nil ? paragraphStyle(forParagraph: paragraph) : nil
+
+            struct Replacement { let range: NSRange; let run: NSAttributedString }
+            var replacements: [Replacement] = []
+            for match in Self.wikiTokenPattern.matches(in: text, range: full) {
+                let target = (text as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                let label = match.range(at: 2).location != NSNotFound
+                    ? (text as NSString).substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces) : nil
+                guard !target.isEmpty else { continue }
+                var style = InlineStyle(attributes: storage.attributes(at: content.location + match.range.location, effectiveRange: nil))
+                guard style.wikiLink == nil, style.footnoteRef == nil, !style.code else { continue }
+                style.wikiLink = target
+                style.link = nil
+                let run = NSAttributedString(string: (label?.isEmpty == false ? label! : target),
+                                             attributes: engine.attributes(block: block, inline: style, paragraphStyle: ps,
+                                                                           isHeaderCell: table?.startingRow == 0))
+                replacements.append(Replacement(range: NSRange(location: content.location + match.range.location, length: match.range.length), run: run))
+            }
+            for match in Self.footnoteTokenPattern.matches(in: text, range: full) {
+                let id = (text as NSString).substring(with: match.range(at: 1))
+                var style = InlineStyle(attributes: storage.attributes(at: content.location + match.range.location, effectiveRange: nil))
+                guard style.wikiLink == nil, style.footnoteRef == nil, !style.code else { continue }
+                style.footnoteRef = id
+                style.link = nil
+                let run = NSAttributedString(string: id, attributes: engine.attributes(block: block, inline: style, paragraphStyle: ps,
+                                                                                       isHeaderCell: table?.startingRow == 0))
+                replacements.append(Replacement(range: NSRange(location: content.location + match.range.location, length: match.range.length), run: run))
+            }
+            guard !replacements.isEmpty else { return paragraph }
+            for replacement in replacements.sorted(by: { $0.range.location > $1.range.location }) {
+                replaceText(replacement.range, with: replacement.run)
+                paragraph.length += replacement.run.length - replacement.range.length
+            }
+            return paragraph
+        }
+
+        private static let tagPattern = try! NSRegularExpression(pattern: #"(?<=^|[\s(,])#[\p{L}\p{N}_/\-]*\p{L}[\p{L}\p{N}_/\-]*"#)
+
+        /// `#tags` are derived from the text: mark exactly the matching runs, nothing else.
+        private func normalizeTags(in paragraph: NSRange, block: BlockInfo) {
+            guard let storage, !block.kind.isPlainText else { return }
+            let content = contentRange(ofParagraph: paragraph)
+            guard content.length > 0 else { return }
+            let text = nsString.substring(with: content)
+            var wanted: [NSRange] = Self.tagPattern.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+                .map { NSRange(location: content.location + $0.range.location, length: $0.range.length) }
+            wanted = wanted.filter { range in
+                var clean = true
+                storage.enumerateAttributes(in: range, options: []) { attrs, _, stop in
+                    if attrs[.mmWikiLink] != nil || attrs[.mmFootnoteRef] != nil || attrs[.link] != nil || attrs[.attachment] != nil || attrs[.mmCode] != nil {
+                        clean = false
+                        stop.pointee = true
+                    }
+                }
+                return clean
+            }
+            var existing: [NSRange] = []
+            storage.enumerateAttribute(.mmTag, in: content, options: []) { value, range, _ in
+                if value != nil { existing.append(range) }
+            }
+            if existing == wanted { return }
+            for range in existing { removeAttribute(.mmTag, range: range) }
+            for range in wanted { addAttributes([.mmTag: true], range: range) }
         }
 
         private func markerIsValid(_ range: NSRange, for block: BlockInfo) -> Bool {
@@ -668,6 +775,8 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 return text == "\u{2022}\t"
             case .ordered:
                 return text.range(of: #"^\d+\.\t$"#, options: .regularExpression) != nil
+            case .footnote(let id):
+                return text == "\(id)\t"
             case .task:
                 guard range.length == 2,
                       nsString.character(at: range.location) == MarkdownSyntax.attachmentUTF16,
@@ -797,6 +906,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                    previousChar != MarkdownSyntax.newlineUTF16 {
                     inline = InlineStyle(attributes: previous)
                     inline.link = nil
+                    inline.wikiLink = nil
+                    inline.footnoteRef = nil
+                    inline.tag = false
                 }
             }
             return engine.attributes(block: block, inline: inline, paragraphStyle: paragraphStyle,
@@ -853,7 +965,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 textView.selectedRange = NSRange(location: selection.location + 1, length: 0)
                 textView.scrollRangeToVisible(textView.selectedRange)
                 return true
-            case .heading, .paragraph:
+            case .heading, .paragraph, .footnote:
                 splitParagraph(at: selection, currentBlock: block, newBlock: .paragraph, marker: nil)
                 return true
             }
@@ -870,7 +982,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             guard selection.location == contentStart else { return false }
 
             switch block.kind {
-            case .bullet, .ordered, .task, .blockquote, .codeBlock, .comment, .frontMatter:
+            case .bullet, .ordered, .task, .blockquote, .codeBlock, .comment, .frontMatter, .footnote:
                 setBlock(paragraph, to: .paragraph)
                 return true
             case .tableCell:
@@ -954,7 +1066,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
 
             if paragraph.length == 0 {
                 // Trailing empty paragraph: nothing to store attributes on yet.
-                if newBlock.isList {
+                if newBlock.hasMarker {
                     let marker = engine.marker(for: newBlock, number: 1)
                     batch { replaceText(NSRange(location: paragraph.location, length: 0), with: marker) }
                     textView.selectedRange = NSRange(location: paragraph.location + marker.length, length: 0)
@@ -990,7 +1102,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 }
                 addAttributes([.mmBlock: newBlock], range: paragraph)
                 var newMarker = 0
-                if newBlock.isList {
+                if newBlock.hasMarker {
                     let marker = engine.marker(for: newBlock, number: 1)
                     replaceText(NSRange(location: paragraph.location, length: 0), with: marker)
                     paragraph.length += marker.length
@@ -1098,6 +1210,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 case .mmItalic: inline.italic.toggle()
                 case .mmStrike: inline.strike.toggle()
                 case .mmCode: inline.code.toggle()
+                case .mmHighlight: inline.highlight.toggle()
                 default: break
                 }
                 let table = tableBlock(forParagraph: paragraph)
@@ -1238,7 +1351,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             let anchorStyle = paragraphStyle(forParagraph: anchor)
             let content = contentRange(ofParagraph: anchor)
             let anchorHasNewline = NSMaxRange(anchor) > NSMaxRange(content)
-            let replaceAnchor = content.length == 0 && !anchorBlock.isList && !anchorBlock.isProtected
+            let replaceAnchor = content.length == 0 && !anchorBlock.hasMarker && !anchorBlock.isProtected
 
             batch {
                 let insertion = NSMutableAttributedString()
@@ -1337,6 +1450,173 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             return result
         }
 
+        // MARK: Footnotes
+
+        private func nextFootnoteID() -> String {
+            guard let storage else { return "1" }
+            var numbers: [Int] = []
+            storage.enumerateAttribute(.mmFootnoteRef, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
+                if let id = value as? String, let n = Int(id) { numbers.append(n) }
+            }
+            storage.enumerateAttribute(.mmBlock, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
+                if let block = value as? BlockInfo, case .footnote(let id) = block.kind, let n = Int(id) { numbers.append(n) }
+            }
+            return String((numbers.max() ?? 0) + 1)
+        }
+
+        /// Inserts a `[^n]` reference at the cursor and a matching definition at the end of the document.
+        func insertFootnote() {
+            guard let textView else { return }
+            let selection = textView.selectedRange
+            let paragraph = paragraphRange(at: selection.location)
+            let block = blockInfo(forParagraph: paragraph)
+            if block.kind.isPlainText { return }
+            if case .footnote = block.kind { return }
+            if case .horizontalRule = block.kind { return }
+            let id = nextFootnoteID()
+            let table = tableBlock(forParagraph: paragraph)
+            var style = InlineStyle(attributes: textView.typingAttributes)
+            style.footnoteRef = id
+            style.link = nil
+            style.wikiLink = nil
+            let reference = NSAttributedString(string: id, attributes: engine.attributes(
+                block: block, inline: style, paragraphStyle: table != nil ? paragraphStyle(forParagraph: paragraph) : nil,
+                isHeaderCell: table?.startingRow == 0))
+            batch {
+                replaceText(NSRange(location: NSMaxRange(selection), length: 0), with: reference)
+                let definition = BlockInfo(.footnote(id: id))
+                let content = NSMutableAttributedString(attributedString: engine.marker(for: definition, number: 1))
+                let anchor = paragraphRange(at: max(length - 1, 0))
+                insertParagraphs([MarkdownRenderer.Paragraph(content: content, block: definition, paragraphStyle: nil)],
+                                 after: anchor, placeCursorIn: 0)
+            }
+        }
+
+        // MARK: Folding
+
+        private func headingLevel(ofParagraph paragraph: NSRange) -> Int? {
+            if case .heading(let level) = blockInfo(forParagraph: paragraph).kind { return level }
+            return nil
+        }
+
+        /// The heading paragraph for a location: the one containing it, or the nearest one above.
+        private func sectionHeading(at location: Int) -> NSRange? {
+            var paragraph = paragraphRange(at: location)
+            while true {
+                if paragraph.length > 0, headingLevel(ofParagraph: paragraph) != nil { return paragraph }
+                guard paragraph.location > 0 else { return nil }
+                paragraph = paragraphRange(at: paragraph.location - 1)
+            }
+        }
+
+        /// Everything below a heading up to the next heading of the same or a higher level.
+        private func sectionBody(for heading: NSRange) -> NSRange? {
+            guard let level = headingLevel(ofParagraph: heading) else { return nil }
+            let start = NSMaxRange(heading)
+            var location = start
+            while location < length {
+                let paragraph = paragraphRange(at: location)
+                if paragraph.length == 0 { break }
+                if let other = headingLevel(ofParagraph: paragraph), other <= level { break }
+                location = NSMaxRange(paragraph)
+            }
+            let end = min(location, length)
+            // Keep the final newline of the last folded paragraph visible so the next heading starts on its own line.
+            var bodyEnd = end
+            if bodyEnd > start, nsString.character(at: bodyEnd - 1) == MarkdownSyntax.newlineUTF16 { bodyEnd -= 1 }
+            return bodyEnd > start ? NSRange(location: start, length: bodyEnd - start) : nil
+        }
+
+        func isSectionFolded(at location: Int) -> Bool {
+            guard let heading = sectionHeading(at: location) else { return false }
+            return foldedHeadings.contains(heading.location)
+        }
+
+        func toggleFold() {
+            guard let textView, let heading = sectionHeading(at: textView.selectedRange.location) else { return }
+            if foldedHeadings.contains(heading.location) {
+                foldedHeadings.remove(heading.location)
+            } else {
+                guard sectionBody(for: heading) != nil else { return }
+                foldedHeadings.insert(heading.location)
+                textView.selectedRange = NSRange(location: NSMaxRange(contentRange(ofParagraph: heading)), length: 0)
+            }
+            recomputeFolds()
+            refreshState()
+        }
+
+        func unfoldAll() {
+            guard !foldedHeadings.isEmpty else { return }
+            foldedHeadings = []
+            recomputeFolds()
+            refreshState()
+        }
+
+        private func recomputeFolds() {
+            guard let textView, let layoutManager = textView.layoutManager else { return }
+            var ranges: [NSRange] = []
+            var valid: Set<Int> = []
+            for location in foldedHeadings.sorted() {
+                let heading = paragraphRange(at: location)
+                guard heading.location == location, let body = sectionBody(for: heading) else { continue }
+                valid.insert(location)
+                ranges.append(body)
+            }
+            foldedHeadings = valid
+            let previous = foldedRanges
+            foldedRanges = ranges
+            let full = NSRange(location: 0, length: length)
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
+            for location in valid {
+                let heading = paragraphRange(at: location)
+                layoutManager.addTemporaryAttribute(.backgroundColor,
+                                                    value: NSColor.quaternaryLabelColor.withAlphaComponent(0.18),
+                                                    forCharacterRange: contentRange(ofParagraph: heading))
+            }
+            if previous != ranges {
+                layoutManager.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
+                layoutManager.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+                textView.needsDisplay = true
+            }
+        }
+
+        private func shiftFoldedHeadings(for affected: NSRange, newLength: Int) {
+            let delta = newLength - affected.length
+            var updated: Set<Int> = []
+            for location in foldedHeadings {
+                if NSMaxRange(affected) <= location {
+                    updated.insert(location + delta)          // edit above: the heading moves
+                } else if affected.location < location {
+                    continue                                   // edit swallows the heading start: unfold
+                } else {
+                    updated.insert(location)                   // edit in the heading or below: recomputed later
+                }
+            }
+            foldedHeadings = updated
+        }
+
+        private func unfoldIfNeeded(for selection: NSRange) {
+            guard !foldedRanges.isEmpty else { return }
+            let probe = NSRange(location: selection.location, length: max(selection.length, 0))
+            var changed = false
+            for location in foldedHeadings {
+                let heading = paragraphRange(at: location)
+                guard let body = sectionBody(for: heading) else { continue }
+                let intersects = probe.length == 0
+                    ? (probe.location > body.location && probe.location < NSMaxRange(body))
+                    : NSIntersectionRange(probe, body).length > 0
+                if intersects {
+                    foldedHeadings.remove(location)
+                    changed = true
+                }
+            }
+            if changed { recomputeFolds() }
+        }
+
+        private func isFolded(characterIndex: Int) -> Bool {
+            foldedRanges.contains { NSLocationInRange(characterIndex, $0) }
+        }
+
         // MARK: Mouse & pasteboard
 
         func handleMouseDown(_ event: NSEvent) -> Bool {
@@ -1415,7 +1695,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
 
             let insertion = NSMutableAttributedString()
             var range = selection
-            if block.isList && atStart {
+            if block.hasMarker && atStart {
                 range = NSRange(location: paragraph.location, length: NSMaxRange(selection) - paragraph.location)
                 insertion.append(rendered)
                 insertion.append(renderer.newline(for: lastBlock, paragraphStyle: renderedParagraphs.last?.paragraphStyle))
@@ -1497,13 +1777,46 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                 attrs = storage.attributes(at: index, effectiveRange: nil)
             }
             let inline = InlineStyle(attributes: attrs)
-            let state = FormatState(bold: inline.bold, italic: inline.italic, strike: inline.strike,
-                                    code: inline.code, hasLink: inline.link != nil,
+            var state = FormatState(bold: inline.bold, italic: inline.italic, strike: inline.strike,
+                                    code: inline.code, highlight: inline.highlight, hasLink: inline.link != nil,
                                     blockKind: block.kind, indent: block.indent,
                                     hasSelection: selection.length > 0)
+            state.folded = isSectionFolded(at: selection.location)
             if parent.controller.state != state {
                 parent.controller.state = state
             }
         }
+    }
+}
+
+extension RichMarkdownEditorView.Coordinator: @MainActor NSLayoutManagerDelegate {
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>, characterIndexes: UnsafePointer<Int>,
+                       font: NSFont, forGlyphRange glyphRange: NSRange) -> Int {
+        guard !foldedRanges.isEmpty, glyphRange.length > 0 else { return 0 }
+        var updated = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
+        var changed = false
+        for index in 0..<glyphRange.length where foldedRanges.contains(where: { NSLocationInRange(characterIndexes[index], $0) }) {
+            updated[index] = .null
+            changed = true
+        }
+        guard changed else { return 0 }
+        updated.withUnsafeBufferPointer { buffer in
+            layoutManager.setGlyphs(glyphs, properties: buffer.baseAddress!, characterIndexes: characterIndexes,
+                                    font: font, forGlyphRange: glyphRange)
+        }
+        return glyphRange.length
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+                       lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
+                       in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+        guard !foldedRanges.isEmpty else { return false }
+        let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        guard foldedRanges.contains(where: { NSLocationInRange(characterRange.location, $0) }) else { return false }
+        lineFragmentRect.pointee.size.height = 0
+        lineFragmentUsedRect.pointee.size.height = 0
+        baselineOffset.pointee = 0
+        return true
     }
 }
