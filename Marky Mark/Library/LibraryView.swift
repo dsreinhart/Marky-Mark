@@ -142,6 +142,7 @@ struct LibraryView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
+                        .help("Stop filtering by #\(selected) and show every sheet in the folder")
                     }
                 }
             }
@@ -150,14 +151,36 @@ struct LibraryView: View {
         }
     }
 
+    /// "2 sheets tagged #test/alpha", "1 sheet matching “plan”", or both, while a filter is on.
+    private var filterSummary: String {
+        let count = library.filteredFiles.count
+        var text = count == 1 ? "1 sheet" : "\(count) sheets"
+        let query = library.searchText.trimmingCharacters(in: .whitespaces)
+        if let keyword = library.selectedKeyword { text += " tagged #\(keyword)" }
+        if !query.isEmpty { text += (library.selectedKeyword == nil ? " matching “" : " and matching “") + query + "”" }
+        return text
+    }
+
     @ViewBuilder
     private var list: some View {
         if library.isFiltering {
-            List(library.filteredFiles, selection: $selection) { node in
-                row(node)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(filterSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .help(library.selectedKeyword == nil
+                          ? "Only sheets whose name or keywords match the search are listed."
+                          : "Only sheets carrying this tag (or a tag nested under it) are listed. Clear the tag to see the whole folder again.")
+                Divider()
+                List(library.filteredFiles, selection: $selection) { node in
+                    row(node)
+                }
+                .listStyle(.sidebar)
+                .onChange(of: selection) { _, url in open(url) }
             }
-            .listStyle(.sidebar)
-            .onChange(of: selection) { _, url in open(url) }
         } else if let root = library.root {
             List(root.children ?? [], children: \.children, selection: $selection) { node in
                 row(node)
@@ -246,9 +269,17 @@ private struct TagRows: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help(tooltip(for: node))
             if let children = node.children {
                 TagRows(nodes: children, depth: depth + 1, selected: selected, onSelect: onSelect)
             }
         }
+    }
+
+    private func tooltip(for node: LibraryModel.TagNode) -> String {
+        let sheets = node.count == 1 ? "1 sheet is" : "\(node.count) sheets are"
+        let nested = node.children == nil ? "" : ", counting sub-tags"
+        let action = selected == node.path ? "Click to clear the filter." : "Click to list only those sheets."
+        return "\(sheets) tagged #\(node.path)\(nested). \(action)"
     }
 }
