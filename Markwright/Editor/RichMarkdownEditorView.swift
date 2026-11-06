@@ -1632,9 +1632,46 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: container)
             guard rect.contains(point) else { return false }
             let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-            guard charIndex < storage.length,
-                  storage.attribute(.attachment, at: charIndex, effectiveRange: nil) is TaskCheckboxAttachment else { return false }
-            toggleTask(at: charIndex)
+            guard charIndex < storage.length else { return false }
+            if storage.attribute(.attachment, at: charIndex, effectiveRange: nil) is TaskCheckboxAttachment {
+                toggleTask(at: charIndex)
+                return true
+            }
+            if let id = storage.attribute(.mmFootnoteRef, at: charIndex, effectiveRange: nil) as? String {
+                return jumpToFootnoteDefinition(id)
+            }
+            if storage.attribute(.mmMarker, at: charIndex, effectiveRange: nil) as? Bool == true,
+               case .footnote(let id) = blockInfo(forParagraph: paragraphRange(at: charIndex)).kind {
+                return jumpToFootnoteReference(id)
+            }
+            return false
+        }
+
+        /// Reveals the `[^id]:` definition paragraph.
+        private func jumpToFootnoteDefinition(_ id: String) -> Bool {
+            guard let textView, let storage else { return false }
+            var location = 0
+            while location < storage.length {
+                let paragraph = paragraphRange(at: location)
+                if paragraph.length == 0 { break }
+                if case .footnote(let found) = blockInfo(forParagraph: paragraph).kind, found == id {
+                    EditorBehaviors.reveal(textView, range: contentRange(ofParagraph: paragraph))
+                    return true
+                }
+                location = NSMaxRange(paragraph)
+            }
+            return false
+        }
+
+        /// Reveals the first `[^id]` reference in the text.
+        private func jumpToFootnoteReference(_ id: String) -> Bool {
+            guard let textView, let storage else { return false }
+            var target: NSRange?
+            storage.enumerateAttribute(.mmFootnoteRef, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+                if value as? String == id { target = range; stop.pointee = true }
+            }
+            guard let target else { return false }
+            EditorBehaviors.reveal(textView, range: target)
             return true
         }
 

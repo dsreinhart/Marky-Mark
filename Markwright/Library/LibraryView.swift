@@ -11,6 +11,10 @@ import AppKit
 
 struct LibraryView: View {
     let currentFileURL: URL?
+    /// Live text of the sheet in this window, for the match count.
+    let currentText: String
+    /// Moves to the next (false) or previous (true) match of the query in this window's sheet.
+    let onNavigateMatch: ((String, Bool) -> Void)?
     @State private var selection: URL? = nil
     @State private var renameTarget: LibraryNode? = nil
     @State private var renameText = ""
@@ -18,8 +22,10 @@ struct LibraryView: View {
     @State private var newGroupName = ""
     private var library = LibraryModel.shared
 
-    init(currentFileURL: URL?) {
+    init(currentFileURL: URL?, currentText: String = "", onNavigateMatch: ((String, Bool) -> Void)? = nil) {
         self.currentFileURL = currentFileURL
+        self.currentText = currentText
+        self.onNavigateMatch = onNavigateMatch
     }
 
     var body: some View {
@@ -161,6 +167,29 @@ struct LibraryView: View {
         return text
     }
 
+    /// "3 matches in this sheet" with previous / next buttons, while the search term occurs here.
+    @ViewBuilder
+    private var matchNavigator: some View {
+        let query = library.searchText.trimmingCharacters(in: .whitespaces)
+        let count = query.isEmpty ? 0 : RichEditorController.matchCount(of: query, in: currentText)
+        if count > 0, let onNavigateMatch {
+            HStack(spacing: 6) {
+                Text(count == 1 ? "1 match in this sheet" : "\(count) matches in this sheet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { onNavigateMatch(query, true) } label: { Image(systemName: "chevron.up") }
+                    .help("Previous match (⌘⇧G)")
+                Button { onNavigateMatch(query, false) } label: { Image(systemName: "chevron.down") }
+                    .help("Next match (⌘G)")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
+        }
+    }
+
     @ViewBuilder
     private var list: some View {
         if library.isFiltering {
@@ -174,12 +203,18 @@ struct LibraryView: View {
                     .help(library.selectedKeyword == nil
                           ? "Only sheets whose name or keywords match the search are listed."
                           : "Only sheets carrying this tag (or a tag nested under it) are listed. Clear the tag to see the whole folder again.")
+                matchNavigator
                 Divider()
-                List(library.filteredFiles, selection: $selection) { node in
-                    row(node)
+                let openMatches = openTabMatches
+                List(selection: $selection) {
+                    ForEach(library.filteredFiles) { node in searchRow(node) }
+                    if !openMatches.isEmpty {
+                        Section("Open Tabs") {
+                            ForEach(openMatches) { node in searchRow(node) }
+                        }
+                    }
                 }
                 .listStyle(.sidebar)
-                .onChange(of: selection) { _, url in open(url) }
             }
         } else if let root = library.root {
             List(root.children ?? [], children: \.children, selection: $selection) { node in
@@ -188,6 +223,17 @@ struct LibraryView: View {
             .listStyle(.sidebar)
             .onChange(of: selection) { _, url in open(url) }
         }
+    }
+
+    /// A search result: clicking it opens the sheet and jumps to the match, even when it is
+    /// already the selected row (the current sheet), which a selection change alone would miss.
+    private func searchRow(_ node: LibraryNode) -> some View {
+        row(node)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selection = node.url
+                open(node.url)
+            }
     }
 
     private func row(_ node: LibraryNode) -> some View {
@@ -234,12 +280,37 @@ struct LibraryView: View {
 
     // MARK: - Actions
 
+    /// Open documents outside the library whose title or text matches the search, so a search
+    /// also finds what is on screen (the help guide, files opened from elsewhere).
+    private var openTabMatches: [LibraryNode] {
+        let query = library.searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return [] }
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        return DocumentStore.shared.documents.compactMap { document in
+            guard let url = document.fileURL, !library.contains(url) else { return nil }
+            let name = url.deletingPathExtension().lastPathComponent
+            guard name.range(of: query, options: options) != nil || document.text.range(of: query, options: options) != nil else { return nil }
+            var keywords = FrontMatter.keywords(in: document.text)
+            for tag in LibraryModel.inlineTags(in: document.text) where !keywords.contains(tag) { keywords.append(tag) }
+            return LibraryNode(url: url, name: name, isFolder: false, children: nil,
+                               wordCount: TextStatistics.compute(markdown: document.text).words,
+                               keywords: keywords, body: document.text, modified: Date())
+        }
+    }
+
     private func open(_ url: URL?) {
-        guard let url, !url.hasDirectoryPath, let root = library.root,
-              root.allFiles.contains(where: { $0.url == url }) else { return }
-        guard url.standardizedFileURL != currentFileURL?.standardizedFileURL else { return }
+        guard let url, !url.hasDirectoryPath else { return }
         let store = DocumentStore.shared
+        let inLibrary = library.root?.allFiles.contains(where: { $0.url == url }) ?? false
+        guard inLibrary || store.document(for: url) != nil else { return }
+        let query = library.searchText.trimmingCharacters(in: .whitespaces)
+        if url.standardizedFileURL == currentFileURL?.standardizedFileURL {
+            // Already showing: just go to the match.
+            if !query.isEmpty, let document = store.document(for: url) { document.pendingJump = .init(text: query) }
+            return
+        }
         if let document = store.openDocument(at: url) {
+            if !query.isEmpty { document.pendingJump = .init(text: query) }
             store.show(document)
         }
         // The file opened in its own tab; this tab's sidebar keeps pointing at this tab's document.

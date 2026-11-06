@@ -309,6 +309,7 @@ final class StyleEngine {
         } else if inline.footnoteRef != nil {
             color = style.linkColor
             attrs[.baselineOffset] = style.bodySize * 0.4
+            attrs[.cursor] = NSCursor.pointingHand
         } else if inline.tag {
             color = .controlAccentColor
             attrs[.backgroundColor] = NSColor.controlAccentColor.withAlphaComponent(0.12)
@@ -339,6 +340,7 @@ final class StyleEngine {
                 .font: NSFont.monospacedDigitSystemFont(ofSize: style.bodySize * 0.7, weight: .medium),
                 .foregroundColor: style.linkColor,
                 .baselineOffset: style.bodySize * 0.35,
+                .cursor: NSCursor.pointingHand,
             ]
         }
         return [

@@ -64,6 +64,8 @@ struct EditorOptions: Equatable {
 /// vertical room for typewriter scrolling.
 class MarkwrightTextView: NSTextView {
     var baseInset = NSSize(width: 24, height: 20)
+    /// Raw editor: ⌘-click on a `[^id]` reference jumps to its definition and back.
+    var handlesFootnoteClicks = false
     var options = EditorOptions() {
         didSet { if options != oldValue { needsLayout = true; updateInsets() } }
     }
@@ -76,6 +78,69 @@ class MarkwrightTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateInsets()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if handlesFootnoteClicks, event.modifierFlags.contains(.command), jumpFootnote(at: event) { return }
+        super.mouseDown(with: event)
+    }
+
+    /// Raw markup: a click inside `[^id]` goes to the `[^id]:` definition; a click on the
+    /// definition's label goes to the first reference.
+    func jumpFootnote(at event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        let ns = string as NSString
+        guard index < ns.length else { return false }
+        let line = ns.lineRange(for: NSRange(location: index, length: 0))
+        let code = Self.codeRanges(in: string)
+        func inCode(_ range: NSRange) -> Bool { code.contains { NSIntersectionRange($0, range).length > 0 } }
+        let token = try! NSRegularExpression(pattern: #"\[\^([^\]\s]+)\]"#)
+        guard let hit = token.matches(in: string, range: line).first(where: { NSLocationInRange(index, $0.range) }),
+              !inCode(hit.range) else { return false }
+        let id = ns.substring(with: hit.range(at: 1))
+        let escaped = NSRegularExpression.escapedPattern(for: id)
+        let isDefinition = hit.range.location == line.location
+            && NSMaxRange(hit.range) < ns.length && ns.character(at: NSMaxRange(hit.range)) == 0x3A // ":"
+        let pattern = isDefinition ? #"\[\^"# + escaped + #"\](?!:)"# : #"^\[\^"# + escaped + #"\]:"#
+        let target = try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+        let matches = target.matches(in: string, range: NSRange(location: 0, length: ns.length))
+        guard let found = matches.first(where: { !inCode($0.range) }) else { return false }
+        EditorBehaviors.reveal(self, range: found.range)
+        return true
+    }
+
+    /// Ranges of fenced code blocks and inline code spans, where markup is only an example.
+    static func codeRanges(in text: String) -> [NSRange] {
+        let ns = text as NSString
+        var ranges: [NSRange] = []
+        var fenceStart: Int? = nil
+        var location = 0
+        while location < ns.length {
+            let line = ns.lineRange(for: NSRange(location: location, length: 0))
+            let trimmed = ns.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                if let start = fenceStart {
+                    ranges.append(NSRange(location: start, length: NSMaxRange(line) - start))
+                    fenceStart = nil
+                } else {
+                    fenceStart = line.location
+                }
+            } else if fenceStart == nil {
+                // Inline code spans on this line.
+                var open: Int? = nil
+                var i = line.location
+                while i < NSMaxRange(line) {
+                    if ns.character(at: i) == 0x60 { // `
+                        if let o = open { ranges.append(NSRange(location: o, length: i - o + 1)); open = nil } else { open = i }
+                    }
+                    i += 1
+                }
+            }
+            location = NSMaxRange(line)
+        }
+        if let start = fenceStart { ranges.append(NSRange(location: start, length: ns.length - start)) }
+        return ranges
     }
 
     /// Supplies sheet names for `[[` autocompletion.
@@ -139,6 +204,14 @@ class MarkwrightTextView: NSTextView {
 
 @MainActor
 enum EditorBehaviors {
+    /// Selects `range`, scrolls it into view and flashes the find indicator over it.
+    static func reveal(_ textView: NSTextView, range: NSRange) {
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+        textView.showFindIndicator(for: range)
+    }
+
 
     /// Scrolls so the line with the insertion point sits in the vertical middle of the view.
     static func typewriterScroll(_ textView: NSTextView, animated: Bool = true) {

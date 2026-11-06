@@ -54,17 +54,41 @@ final class RichEditorController {
     func refreshActive() { isActive = coordinator != nil || rawTextView != nil }
 
     /// Selects the next occurrence of `needle` after the cursor (wrapping), scrolls to it and flashes it.
-    func jump(toText needle: String) {
+    /// Selects and briefly highlights `needle`: the next occurrence after the cursor (wrapping),
+    /// or the first one in the document when `fromStart` is set.
+    func jump(toText needle: String, fromStart: Bool = false, backwards: Bool = false,
+              options: NSString.CompareOptions = []) {
         guard let textView = activeTextView, !needle.isEmpty else { return }
         let ns = textView.string as NSString
-        let start = min(NSMaxRange(textView.selectedRange), ns.length)
-        var found = ns.range(of: needle, options: [], range: NSRange(location: start, length: ns.length - start))
-        if found.location == NSNotFound { found = ns.range(of: needle) }
+        let selection = textView.selectedRange
+        var found: NSRange
+        if backwards {
+            let end = min(selection.location, ns.length)
+            found = ns.range(of: needle, options: options.union(.backwards), range: NSRange(location: 0, length: end))
+            if found.location == NSNotFound { found = ns.range(of: needle, options: options.union(.backwards)) }
+        } else {
+            let start = fromStart ? 0 : min(NSMaxRange(selection), ns.length)
+            found = ns.range(of: needle, options: options, range: NSRange(location: start, length: ns.length - start))
+            if found.location == NSNotFound { found = ns.range(of: needle, options: options) }
+        }
         guard found.location != NSNotFound else { return }
-        textView.window?.makeFirstResponder(textView)
-        textView.setSelectedRange(found)
-        textView.scrollRangeToVisible(found)
-        textView.showFindIndicator(for: found)
+        EditorBehaviors.reveal(textView, range: found)
+    }
+
+    /// Number of occurrences of `needle` in `text`, as the library search counts them.
+    static func matchCount(of needle: String, in text: String) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        let ns = text as NSString
+        var count = 0
+        var location = 0
+        while location < ns.length {
+            let r = ns.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
+                             range: NSRange(location: location, length: ns.length - location))
+            if r.location == NSNotFound { break }
+            count += 1
+            location = NSMaxRange(r)
+        }
+        return count
     }
 
     // MARK: - Inline formatting

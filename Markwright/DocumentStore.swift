@@ -186,7 +186,11 @@ final class DocumentStore {
         }
         if docs.isEmpty {
             let firstLaunch = !UserDefaults.standard.bool(forKey: Keys.launched)
-            docs = [newDocument(text: firstLaunch ? ContentView.sampleMarkdown : "")]
+            if firstLaunch, let guide = HelpBook.document() {
+                docs = [guide]
+            } else {
+                docs = [newDocument(text: firstLaunch ? ContentView.sampleMarkdown : "")]
+            }
         }
         UserDefaults.standard.set(true, forKey: Keys.launched)
         return docs

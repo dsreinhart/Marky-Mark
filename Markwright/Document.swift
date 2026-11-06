@@ -29,6 +29,14 @@ final class Document: Identifiable {
     private(set) var versions: [DocumentVersion] = []
     /// How the file is encoded on disk (BOM, line endings); restored on every save.
     var fileFormat = TextFileFormat()
+    /// Text the window showing this document should select and flash once its editor is up
+    /// (set when a sheet is opened from a library search).
+    var pendingJump: JumpRequest? = nil
+
+    struct JumpRequest: Equatable {
+        let id = UUID()
+        let text: String
+    }
 
     @ObservationIgnored private var autosaveTask: Task<Void, Never>? = nil
     @ObservationIgnored var onFileChange: (() -> Void)? = nil

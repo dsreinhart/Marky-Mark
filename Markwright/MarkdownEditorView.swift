@@ -60,6 +60,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.layoutManager?.delegate = context.coordinator
         textView.wikiCompletions = { partial in LibraryModel.shared.sheetNames(matching: partial) }
+        textView.handlesFootnoteClicks = true
         textView.string = text
 
         scrollView.documentView = textView

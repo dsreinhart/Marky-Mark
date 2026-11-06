@@ -139,33 +139,53 @@ struct ContentView: View {
         .layoutPriority(1)
     }
 
+    private var libraryColumn: some View {
+        LibraryView(currentFileURL: document.fileURL, currentText: document.text, onNavigateMatch: navigateMatch)
+            .frame(width: 250)
+    }
+
+    private var dashboardColumn: some View {
+        DashboardView(text: $document.text, goalKey: document.goalKey, fileURL: document.fileURL,
+                      onJumpToHeading: { controller.jumpToHeading?($0) },
+                      backlinks: currentBacklinks,
+                      onOpenBacklink: { url in
+                          let store = DocumentStore.shared
+                          if let linked = store.openDocument(at: url) { store.show(linked) }
+                      },
+                      onOpenWikiLink: { target in WikiLinkResolver.open(target, near: document.fileURL) },
+                      onSelectTag: { tag in
+                          LibraryModel.shared.selectedKeyword = tag
+                          LibraryModel.shared.searchText = ""
+                          viewSettings.showLibrary = true
+                      },
+                      onJumpToTag: { tag in controller.jump(toText: "#" + tag) })
+            .frame(width: 270)
+    }
+
+    /// Carries out a search jump once the editor exists.
+    private func performPendingJump() async {
+        guard let request = document.pendingJump else { return }
+        for _ in 0..<20 where controller.activeTextView == nil {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        Self.setFindString(request.text)
+        controller.jump(toText: request.text, fromStart: true, options: [.caseInsensitive, .diacriticInsensitive])
+        document.pendingJump = nil
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             if viewSettings.showLibrary && !uiState.isComposing {
-                LibraryView(currentFileURL: document.fileURL)
-                    .frame(width: 250)
+                libraryColumn
                 Divider()
             }
             editorColumn
             if viewSettings.showDashboard && !uiState.isComposing {
                 Divider()
-                DashboardView(text: $document.text, goalKey: document.goalKey, fileURL: document.fileURL,
-                              onJumpToHeading: { controller.jumpToHeading?($0) },
-                              backlinks: currentBacklinks,
-                              onOpenBacklink: { url in
-                                  let store = DocumentStore.shared
-                                  if let linked = store.openDocument(at: url) { store.show(linked) }
-                              },
-                              onOpenWikiLink: { target in WikiLinkResolver.open(target, near: document.fileURL) },
-                              onSelectTag: { tag in
-                                  LibraryModel.shared.selectedKeyword = tag
-                                  LibraryModel.shared.searchText = ""
-                                  viewSettings.showLibrary = true
-                              },
-                              onJumpToTag: { tag in controller.jump(toText: "#" + tag) })
-                    .frame(width: 270)
+                dashboardColumn
             }
         }
+        .task(id: document.pendingJump?.id) { await performPendingJump() }
         .sheet(isPresented: $uiState.showQuickOpen) { QuickOpenView() }
         .sheet(isPresented: $uiState.showExportPreview) { ExportPreviewView(document: document) }
         .background(WindowAccessor { uiState.window = $0 })
@@ -252,6 +272,20 @@ struct ContentView: View {
             entries.append(BacklinkEntry(url: node.url, name: node.name))
         }
         return entries
+    }
+
+    /// Sidebar ▲▼: previous or next occurrence of the library search term in this sheet.
+    private func navigateMatch(_ query: String, backwards: Bool) {
+        Self.setFindString(query)
+        controller.jump(toText: query, backwards: backwards, options: [.caseInsensitive, .diacriticInsensitive])
+    }
+
+    /// Puts the search term on the find pasteboard so Edit > Find Next / Previous (⌘G / ⌘⇧G)
+    /// carry on from a library search.
+    private static func setFindString(_ text: String) {
+        let pasteboard = NSPasteboard(name: .find)
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     // MARK: - Status bar

@@ -22,6 +22,7 @@ struct MarkwrightApp: App {
             EditCommands()
             FormatCommands()
             ViewCommands()
+            HelpCommands()
         }
 
         Settings {
@@ -395,6 +396,19 @@ struct ViewCommands: Commands {
                 .keyboardShortcut("d", modifiers: [.command, .option])
 
             Divider()
+        }
+    }
+}
+
+// MARK: - Help menu
+
+struct HelpCommands: Commands {
+    var body: some Commands {
+        CommandGroup(replacing: .help) {
+            Button("Markwright Help") {
+                HelpBook.show()
+            }
+            .keyboardShortcut("?", modifiers: .command)
         }
     }
 }
