@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		551C94A42F9921F5007B98B9 /* Markwright.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Markwright.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		551C94A42F9921F5007B98B9 /* Markwright.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Markwright.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A1D000000000000000A0004 /* Markwright iPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Markwright iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -34,7 +34,7 @@
 			exceptions = (
 				7A1D000000000000000A000B /* Exceptions for "Markwright" folder in "Markwright" target */,
 			);
-			path = "Markwright";
+			path = Markwright;
 			sourceTree = "<group>";
 		};
 		7A1D000000000000000A0001 /* Shared */ = {
@@ -108,10 +108,10 @@
 				551C94A62F9921F5007B98B9 /* Markwright */,
 				7A1D000000000000000A0001 /* Shared */,
 			);
-			name = "Markwright";
+			name = Markwright;
 			packageProductDependencies = (
 			);
-			productName = "Markwright";
+			productName = Markwright;
 			productReference = 551C94A42F9921F5007B98B9 /* Markwright.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -128,8 +128,8 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				7A1D000000000000000A0002 /* Markwright iPad */,
 				7A1D000000000000000A0001 /* Shared */,
+				7A1D000000000000000A0002 /* Markwright iPad */,
 			);
 			name = "Markwright iPad";
 			packageProductDependencies = (
@@ -436,13 +436,15 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Markwright iPad/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Markwright;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "Markwright";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 - Get Happy, LLC";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -476,13 +478,15 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Markwright iPad/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Markwright;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_CFBundleDisplayName = "Markwright";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 - Get Happy, LLC";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
