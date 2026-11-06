@@ -248,7 +248,7 @@ Markwright keeps files the way it found them. A file saved with Windows (CRLF) o
 
 ## 5. The Library
 
-The library is a sidebar that shows one folder of Markdown files, in the style of Ulysses. Show or hide it with the toolbar button or **View > Show Library** (⌥⌘L).
+The library is a sidebar that shows one folder of Markdown files. Show or hide it with the toolbar button or **View > Show Library** (⌥⌘L).
 
 ### Choosing a folder
 
