@@ -61,23 +61,31 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.layoutManager?.delegate = context.coordinator
         textView.wikiCompletions = { partial in LibraryModel.shared.sheetNames(matching: partial) }
         textView.handlesFootnoteClicks = true
-        textView.string = text
 
+        // In this order: laid out outside a scroll view, the text pushes the view's origin
+        // up by a line for every line of text, and it stays displaced.
         scrollView.documentView = textView
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.applyAppearance()
         context.coordinator.applySyntaxHighlighting()
-        controller?.jumpToHeading = { [weak coordinator = context.coordinator] index in coordinator?.jumpToHeading(index) }
-        controller?.splitAtCursor = { [weak coordinator = context.coordinator] in coordinator?.splitAtCursor() }
+        controller?.editorsWillChange()
+        if controller?.pendingPosition != nil { scrollView.alphaValue = 0 }
+        controller?.rawCoordinator = context.coordinator
         controller?.rawTextView = textView
+        textView.onTakeFocus = { [weak controller] view in controller?.paneDidTakeFocus(view) }
         controller?.refreshActive()
         return scrollView
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.cancelPendingText()
         if let controller = coordinator.parent.controller, controller.rawTextView === nsView.documentView {
+            controller.editorsWillChange()
             controller.rawTextView = nil
+            controller.rawCoordinator = nil
             controller.refreshActive()
         }
     }
@@ -95,10 +103,9 @@ struct MarkdownEditorView: NSViewRepresentable {
             context.coordinator.applyBehaviors()
         }
         if textView.string != text {
-            let selectedRanges = textView.selectedRanges
-            textView.string = text
-            textView.selectedRanges = selectedRanges
-            context.coordinator.applySyntaxHighlighting()
+            context.coordinator.receive(text)
+        } else {
+            context.coordinator.cancelPendingText()
         }
     }
 
@@ -110,9 +117,68 @@ struct MarkdownEditorView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
 
         var styleVersion: Int? = nil
+        /// Separate from the window's, so the two panes of dual mode keep separate histories.
+        private let undo = UndoManager()
+        private var pendingText: String? = nil
+        private var pendingTask: Task<Void, Never>? = nil
 
         init(_ parent: MarkdownEditorView) {
             self.parent = parent
+        }
+
+        func undoManager(for view: NSTextView) -> UndoManager? { undo }
+
+        // MARK: Text from elsewhere
+
+        /// New text that did not come from typing here. In dual mode, the pane without the cursor
+        /// waits for a pause so that fast typing in the other pane stays fast.
+        func receive(_ text: String) {
+            guard let controller = parent.controller, controller.isDual,
+                  textView?.window?.firstResponder !== textView else {
+                apply(text)
+                return
+            }
+            guard pendingText != text else { return }
+            pendingText = text
+            pendingTask?.cancel()
+            pendingTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                self?.flushPendingText()
+            }
+        }
+
+        func flushPendingText() {
+            pendingTask?.cancel()
+            pendingTask = nil
+            guard let text = pendingText else { return }
+            pendingText = nil
+            if textView?.string != text { apply(text) }
+        }
+
+        func cancelPendingText() {
+            pendingTask?.cancel()
+            pendingTask = nil
+            pendingText = nil
+        }
+
+        private func apply(_ text: String) {
+            guard let textView else { return }
+            let clip = scrollView?.contentView
+            let origin = clip?.bounds.origin
+            let length = (text as NSString).length
+            let selection = textView.selectedRange
+            let location = min(selection.location, length)
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+            // The old history describes text that is gone.
+            undo.removeAllActions()
+            applySyntaxHighlighting()
+            if let clip, let origin, let scrollView {
+                clip.scroll(to: origin)
+                scrollView.reflectScrolledClipView(clip)
+            }
+            parent.controller?.paneSync.resync()
         }
 
         var fontSize: CGFloat { parent.style?.bodySize ?? 14 }
@@ -161,8 +227,10 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         func applyBehaviors() {
             guard let textView = textView as? MarkwrightTextView else { return }
-            EditorBehaviors.applyFocus(textView, mode: textView.options.focus, dimColor: baseColor.withAlphaComponent(0.28))
-            if textView.options.typewriter {
+            // In dual mode these follow the cursor, which is only in one pane.
+            let isPassive = parent.controller?.isDual == true && textView.window?.firstResponder !== textView
+            EditorBehaviors.applyFocus(textView, mode: isPassive ? .off : textView.options.focus, dimColor: baseColor.withAlphaComponent(0.28))
+            if textView.options.typewriter, !isPassive {
                 EditorBehaviors.typewriterScroll(textView)
             }
         }

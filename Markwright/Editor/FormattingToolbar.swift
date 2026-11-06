@@ -70,7 +70,7 @@ struct FormattingToolbar: View {
             ToolButton(symbol: "decrease.indent", help: "Decrease Indent (⌘[)", disabled: !state.blockKind.isList || state.indent == 0) { controller.decreaseIndent() }
             separator
             ToolButton(symbol: state.folded ? "rectangle.expand.vertical" : "rectangle.compress.vertical",
-                       help: state.folded ? "Unfold Section (⌥⌘←)" : "Fold Section (⌥⌘←)", active: state.folded) { controller.toggleFold() }
+                       help: state.folded ? "Unfold Section (⌥⌘←)" : "Fold Section (⌥⌘←)", active: state.folded, disabled: controller.rawHasFocus) { controller.toggleFold() }
 
             Spacer(minLength: 0)
         }

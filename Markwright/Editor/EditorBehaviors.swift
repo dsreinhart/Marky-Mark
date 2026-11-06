@@ -66,6 +66,16 @@ class MarkwrightTextView: NSTextView {
     var baseInset = NSSize(width: 24, height: 20)
     /// Raw editor: ⌘-click on a `[^id]` reference jumps to its definition and back.
     var handlesFootnoteClicks = false
+    /// Dual mode: shows a place in both panes instead of just this one.
+    var revealHandler: ((NSTextView, NSRange) -> Void)? = nil
+    /// Called when this view takes the keyboard.
+    var onTakeFocus: ((NSTextView) -> Void)? = nil
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onTakeFocus?(self) }
+        return accepted
+    }
     var options = EditorOptions() {
         didSet { if options != oldValue { needsLayout = true; updateInsets() } }
     }
@@ -206,6 +216,10 @@ class MarkwrightTextView: NSTextView {
 enum EditorBehaviors {
     /// Selects `range`, scrolls it into view and flashes the find indicator over it.
     static func reveal(_ textView: NSTextView, range: NSRange) {
+        if let handler = (textView as? MarkwrightTextView)?.revealHandler {
+            handler(textView, range)
+            return
+        }
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(range)
         textView.scrollRangeToVisible(range)

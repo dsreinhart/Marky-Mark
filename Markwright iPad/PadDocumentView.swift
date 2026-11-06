@@ -24,6 +24,7 @@ struct PadDocumentView: View {
     @AppStorage("view.showDashboard") private var showDashboard = false
     @State private var showSettings = false
     @State private var showCheatSheet = false
+    @State private var showHelp = false
     @State private var showExportPreview = false
     @State private var shareFile: ShareFile? = nil
     @State private var errorMessage: String? = nil
@@ -110,6 +111,7 @@ struct PadDocumentView: View {
             }
         }
         .sheet(isPresented: $showCheatSheet) { MarkdownCheatSheet() }
+        .sheet(isPresented: $showHelp) { PadHelpView() }
         .sheet(isPresented: $showExportPreview) { PadExportPreviewView(markdown: document.text, title: title, documentURL: fileURL) }
         .sheet(item: $shareFile) { file in ActivityView(items: [file.url]) }
         .sheet(item: $linkedSheet) { sheet in LinkedSheetView(sheet: sheet) }
@@ -190,6 +192,7 @@ struct PadDocumentView: View {
                 }
                 Divider()
                 Button("Recent Files…", systemImage: "clock") { dismissDocument() }
+                Button("Markwright Help", systemImage: "questionmark.circle") { showHelp = true }
                 Button("Markdown Cheat Sheet", systemImage: "list.bullet.rectangle") { showCheatSheet = true }
                 Button("Settings…", systemImage: "gearshape") { showSettings = true }
             } label: {
@@ -313,6 +316,31 @@ struct PadDocumentView: View {
     }
 }
 
+
+/// The user guide bundled with the app, read in a sheet over the document.
+struct PadHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private var guide: String {
+        guard let url = Bundle.main.url(forResource: "Markwright Help", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return "The guide is missing from this copy of Markwright."
+        }
+        return text
+    }
+
+    var body: some View {
+        NavigationStack {
+            MarkdownPreview(markdown: guide)
+                .navigationTitle("Markwright Help")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+        }
+        .presentationSizing(.page)
+    }
+}
 
 /// A sheet reached through a wiki link: preview plus a way into Files, where tapping opens it for editing.
 struct LinkedSheet: Identifiable {

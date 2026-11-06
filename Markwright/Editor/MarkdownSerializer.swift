@@ -14,10 +14,33 @@ enum MarkdownSerializer {
     // MARK: - Document
 
     static func markdown(from text: NSAttributedString) -> String {
+        serialize(text).markdown
+    }
+
+    /// The Markdown for `text`, plus the map from that Markdown back to `text`.
+    static func serialize(_ text: NSAttributedString) -> (markdown: String, map: SourceMap) {
         let ns = text.string as NSString
         var emitter = Emitter()
         var counter = OrderedCounter()
         var table: TableAccumulator? = nil
+        var spans: [(lines: Range<Int>, rendered: NSRange)] = []
+        var tableRendered: NSRange? = nil
+
+        /// Records what the emitter added since `start` as the source of `rendered`.
+        func record(from start: Int, rendered: NSRange, skipFence: Bool = false) {
+            var first = start
+            while first < emitter.lines.count, emitter.lines[first].isEmpty { first += 1 }
+            guard first < emitter.lines.count else { return }
+            if skipFence, emitter.lines.count - first > 1 { first += 1 }
+            spans.append((first..<emitter.lines.count, rendered))
+        }
+        func flushTable() {
+            let start = emitter.lines.count
+            table?.flush(into: &emitter)
+            if let rendered = tableRendered { record(from: start, rendered: rendered) }
+            table = nil
+            tableRendered = nil
+        }
 
         var location = 0
         while location < ns.length {
@@ -41,15 +64,26 @@ enum MarkdownSerializer {
                     .replacingOccurrences(of: "\n", with: " ")
                     .replacingOccurrences(of: "|", with: "\u{00A6}")
                 if table == nil || table!.table !== cellBlock.table {
-                    table?.flush(into: &emitter)
+                    flushTable()
                     table = TableAccumulator(table: cellBlock.table)
+                    tableRendered = content
                 }
                 table!.add(row: cellBlock.startingRow, column: cellBlock.startingColumn, text: cellText)
+                if let first = tableRendered {
+                    tableRendered = NSRange(location: first.location, length: NSMaxRange(content) - first.location)
+                }
                 _ = counter.next(for: BlockInfo(.tableCell))
                 continue
             }
-            table?.flush(into: &emitter)
-            table = nil
+            flushTable()
+
+            let linesBefore = emitter.lines.count
+            var skipsFence = false
+            switch block.kind {
+            case .codeBlock, .frontMatter: skipsFence = true
+            default: break
+            }
+            defer { record(from: linesBefore, rendered: content, skipFence: skipsFence) }
 
             let number = counter.next(for: block)
             let indent = String(repeating: "  ", count: block.indent)
@@ -105,8 +139,11 @@ enum MarkdownSerializer {
                 emitter.emit(["[^\(id)]: " + inline], list: block)
             }
         }
-        table?.flush(into: &emitter)
-        return emitter.lines.joined(separator: "\n")
+        flushTable()
+        let markdown = emitter.lines.joined(separator: "\n")
+        let offsets = SourceMap.lineOffsets(of: emitter.lines)
+        let entries = spans.map { SourceMap.Entry(raw: offsets.range(of: $0.lines), rendered: $0.rendered) }
+        return (markdown, SourceMap(entries: entries))
     }
 
     // MARK: - Helpers

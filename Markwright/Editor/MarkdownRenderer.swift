@@ -28,6 +28,29 @@ struct MarkdownRenderer {
         join(paragraphs(for: markdown), trailingNewline: trailingNewline)
     }
 
+    /// Renders a whole document along with the map from its source text to the result.
+    func renderMapped(_ markdown: String) -> (text: NSMutableAttributedString, map: SourceMap) {
+        let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
+        let (items, spans) = paragraphsAndSpans(for: normalized)
+        var starts: [Int] = []
+        var location = 0
+        for item in items {
+            starts.append(location)
+            location += item.content.length + 1
+        }
+        let offsets = SourceMap.lineOffsets(of: normalized)
+        var entries: [SourceMap.Entry] = []
+        for span in spans where !span.paragraphs.isEmpty {
+            // Fence lines render to nothing, so the block's text starts on the next line.
+            let firstLine = span.skipsFirstLine && span.lines.count > 1 ? span.lines.lowerBound + 1 : span.lines.lowerBound
+            let raw = offsets.range(of: firstLine..<span.lines.upperBound)
+            let start = starts[span.paragraphs.lowerBound]
+            let last = span.paragraphs.upperBound - 1
+            entries.append(.init(raw: raw, rendered: NSRange(location: start, length: starts[last] + items[last].content.length - start)))
+        }
+        return (join(items, trailingNewline: true), SourceMap(entries: entries))
+    }
+
     func join(_ paragraphs: [Paragraph], trailingNewline: Bool) -> NSMutableAttributedString {
         let out = NSMutableAttributedString()
         for (index, paragraph) in paragraphs.enumerated() {
@@ -55,11 +78,31 @@ struct MarkdownRenderer {
     }
 
     func paragraphs(for markdown: String) -> [Paragraph] {
-        let blocks = MarkdownParser.parse(markdown.replacingOccurrences(of: "\r\n", with: "\n"))
+        paragraphsAndSpans(for: markdown.replacingOccurrences(of: "\r\n", with: "\n")).paragraphs
+    }
+
+    /// Which source lines produced which output paragraphs, for one parsed block.
+    struct BlockSpan {
+        let lines: Range<Int>
+        let paragraphs: Range<Int>
+        let skipsFirstLine: Bool
+    }
+
+    private func paragraphsAndSpans(for markdown: String) -> (paragraphs: [Paragraph], spans: [BlockSpan]) {
         var result: [Paragraph] = []
+        var spans: [BlockSpan] = []
         var counter = OrderedCounter()
 
-        for block in blocks {
+        for (block, lines) in MarkdownParser.parseWithLines(markdown) {
+            let firstParagraph = result.count
+            defer {
+                var skips = false
+                switch block {
+                case .codeBlock, .frontMatter: skips = true
+                default: break
+                }
+                spans.append(BlockSpan(lines: lines, paragraphs: firstParagraph..<result.count, skipsFirstLine: skips))
+            }
             switch block {
             case .blank:
                 continue
@@ -111,7 +154,7 @@ struct MarkdownRenderer {
                 result.append(listItem(info, number: 1, text: text))
             }
         }
-        return result
+        return (result, spans)
     }
 
     // MARK: - Block builders

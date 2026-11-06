@@ -83,6 +83,11 @@ final class ImageLoader {
 
     private init() {}
 
+    /// The image if it has already been loaded.
+    func cachedImage(for source: String, baseURL: URL?) -> NSImage? {
+        cache[cacheKey(source: source, baseURL: baseURL)]
+    }
+
     func image(for source: String, baseURL: URL?) async -> NSImage? {
         let key = cacheKey(source: source, baseURL: baseURL)
         if let cached = cache[key] { return cached }

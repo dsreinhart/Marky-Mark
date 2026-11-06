@@ -1,6 +1,6 @@
 # Markwright Help
 
-Welcome to Markwright, a Markdown editor for the Mac with a companion app for iPad. This guide covers everything the app does. It is itself a Markdown document, so what you see here is the rendered editor at work: click anywhere and type to try things out. Nothing you change here affects the original: close this tab and choose **Help > Markwright Help** to get a fresh copy.
+Welcome to Markwright, a Markdown editor for the Mac with a companion app for iPad. This guide covers everything the app does. It is itself a Markdown document, so what you see here is the formatted editor at work: click anywhere and type to try things out. Nothing you change here affects the original: close this tab and choose **Help > Markwright Help** to get a fresh copy.
 
 > **Tip:** Switch between this guide and your own documents with the tab bar at the top of the window. Press **⌘?** at any time to bring the guide back.
 
@@ -8,14 +8,25 @@ Welcome to Markwright, a Markdown editor for the Mac with a companion app for iP
 
 ## 1. The basics
 
-### Two editors, one file
+### Raw, Dual and Formatted
 
-Every document can be edited in two ways. Switch between them with the **Rendered / Raw** control in the window toolbar; the status bar at the bottom of the window shows which one is active.
+Every document can be shown three ways. Switch between them with the **Raw / Dual / Formatted** control in the window toolbar; the status bar at the bottom of the window shows which one is active.
 
-- **Rendered** shows the formatted document and lets you edit it directly, like a word processor. Headings, lists, tables, checkboxes and images are live, and the toolbar and Format menu apply styles to the selection.
-- **Raw** shows the Markdown source with syntax highlighting. You type the markup yourself. The toolbar and Format menu still work here: they insert or remove the Markdown syntax around the selection.
+- **Raw** shows the Markdown source with syntax highlighting. You type the markup yourself. The Format menu still works here: it inserts or removes the Markdown syntax around the selection.
+- **Formatted** shows the formatted document and lets you edit it directly, like a word processor. Headings, lists, tables, checkboxes and images are live, and the toolbar and Format menu apply styles to the selection.
+- **Dual** shows both side by side, source on the left and formatted on the right. You can type in either one.
 
-The two views always describe the same text. The file on disk is plain Markdown, so it opens in any other editor. Markwright remembers which view you used last and opens new windows the same way.
+All three describe the same text. The file on disk is plain Markdown, so it opens in any other editor. Markwright remembers which one you used last and opens new windows the same way. Switching keeps your place: the new view opens at the same spot in the document with your selection carried across.
+
+### Working in Dual
+
+- **The panes scroll together.** Scroll either one and the other follows, block by block. Both reach the top and the end of the document at the same time.
+- **Edits appear in the other pane.** The pane you are typing in responds immediately. The other one catches up as soon as you pause, or as soon as you click into it.
+- **Formatting follows the cursor.** The toolbar and Format menu act on whichever pane holds the cursor. In the raw pane they insert Markdown syntax. Folding and indent buttons only act in the formatted pane.
+- **Jumps show in both.** A library search result, the previous and next match buttons, a footnote jump and a tag jump select and flash the place in both panes.
+- **Undo belongs to each pane.** ⌘Z undoes your typing in the pane holding the cursor. Editing in one pane clears the other pane's undo history, because the text it remembers has changed.
+- **Find** (⌘F) opens a separate find bar in the pane holding the cursor, and the other pane follows by scrolling.
+- **Focus Mode and Typewriter Scrolling** apply to the pane holding the cursor.
 
 ### Windows and tabs
 
@@ -51,11 +62,11 @@ A button lights up when the text at the cursor already has that style. Clicking 
 | Link | ⌘K | `[label](https://example.com)` |
 | Footnote | ⌥⇧⌘F | `[^1]` with a `[^1]:` definition |
 
-Select some text and press the shortcut to wrap it. With nothing selected the style applies to what you type next (rendered editor) or inserts the markers with the cursor between them (raw editor).
+Select some text and press the shortcut to wrap it. With nothing selected the style applies to what you type next (formatted view) or inserts the markers with the cursor between them (raw editor).
 
-**Links:** ⌘K opens a small panel for the address and label. In the rendered editor click a link to open it in your browser. If the cursor is already in a link, ⌘K removes it.
+**Links:** ⌘K opens a small panel for the address and label. In the formatted view click a link to open it in your browser. If the cursor is already in a link, ⌘K removes it.
 
-**Footnotes:** the footnote command inserts the next free reference number after the selection and adds a matching definition at the end of the document, with the cursor ready for you to type the note. Here is one in action.[^1]
+**Footnotes:** the footnote command inserts the next free reference number after the selection and adds a matching definition at the end of the document, with the cursor ready for you to type the note. Here is one in action.[^1] In the formatted view click the small number to jump to its definition, and click the number at the start of the definition to come back. In the raw view do the same with ⌘-click on `[^1]`.
 
 ### Paragraph styles
 
@@ -78,7 +89,7 @@ Each of these toggles: apply a heading to a heading of the same level and it bec
 
 ### Lists
 
-In the rendered editor lists behave as you would expect:
+In the formatted view lists behave as you would expect:
 
 - Press **Return** at the end of an item to start the next one. Numbered lists renumber themselves.
 - Press **Return** on an empty item to end the list.
@@ -87,7 +98,7 @@ In the rendered editor lists behave as you would expect:
 
 ### Tables
 
-**Format > Table…** inserts a table of the size you choose. In the rendered editor you edit cells in place: **Tab** moves to the next cell, **⇧Tab** to the previous one and **Return** to the next row. Tables are written in the standard pipe syntax, so they stay readable in the raw view.
+**Format > Table…** inserts a table of the size you choose. In the formatted view you edit cells in place: **Tab** moves to the next cell, **⇧Tab** to the previous one and **Return** to the next row. Tables are written in the standard pipe syntax, so they stay readable in the raw view.
 
 | Column | Another | Notes |
 |---|---|---|
@@ -119,7 +130,7 @@ A comment is a note to yourself that stays in the file but never reaches an expo
 
 ### Folding sections
 
-In the rendered editor you can collapse the body of a heading to see the document's structure. Put the cursor on a heading and press **⌥⌘←** (or use the toolbar's fold button); press it again to expand. **Format > Unfold All Sections** (⌥⇧⌘→) opens everything. Typing into a folded section unfolds it automatically. Folding is a view setting only; the file is never changed by it.
+In the formatted view you can collapse the body of a heading to see the document's structure. Put the cursor on a heading and press **⌥⌘←** (or use the toolbar's fold button); press it again to expand. **Format > Unfold All Sections** (⌥⇧⌘→) opens everything. Typing into a folded section unfolds it automatically. Folding is a view setting only; the file is never changed by it.
 
 ### Find, replace, spelling
 
@@ -250,6 +261,10 @@ Markwright watches the folder, so files added, renamed or deleted in Finder or b
 
 The search field at the top filters the list as you type. It matches sheet names, keywords and tags, and the text inside every sheet. A sheet matched by its text shows the matching line underneath its name. A line above the list says how many sheets match and why. Click the clear button in the field to see everything again.
 
+Clicking a result opens the sheet, jumps to the first match and flashes it. While a search is active and the sheet on screen contains the term, the sidebar shows how many matches it has, with **▲** and **▼** buttons to move to the previous and next one. **⌘G** and **⌘⇧G** step through them too.
+
+Documents open in tabs that are not in the library, such as this guide, are searched as well and appear under **Open Tabs**.
+
 ### The Tags section
 
 Below the sheets, the **Tags** section lists every tag used anywhere in the folder, with a count of the sheets carrying it. Nested tags such as `#project/alpha` appear as a tree you can expand. Click a tag to show only the sheets that use it (selecting a parent includes all its children); click it again, or the **Clear** button, to remove the filter. Hover over a tag for an explanation.
@@ -307,7 +322,7 @@ The dashboard is the right-hand sidebar: **View > Show Dashboard** (⌥⌘D) or 
 - **Composition Mode** (⌥⌘C) hides the toolbar, both sidebars and the window chrome, and narrows the text column so only your writing is left. Press it again, or leave full screen, to come back.
 - **Editor width** (Settings > Editor) limits the text column to narrow, comfortable or wide measures, or lets it fill the window.
 
-All of these work in both editors and are remembered between launches.
+All of these work in every view and are remembered between launches.
 
 ---
 
@@ -374,9 +389,9 @@ Images stored on your Mac are embedded in HTML and PDF output (up to 30 MB each)
 
 ## 12. Markwright for iPad
 
-The iPad app opens Markdown files from the Files app and iCloud Drive, so a library folder kept in iCloud Drive is shared between the two. It offers a syntax-highlighted editor with the same formatting toolbar, a live rendered preview beside it (**Editor**, **Split** or **Preview**), the dashboard, typewriter scrolling, the same themes and fonts, the cheat sheet, and HTML, PDF and RTF export with printing from the **More** menu. Images picked on iPad are saved beside the document when its folder has been opened once, and embedded in the text otherwise.
+The iPad app opens Markdown files from the Files app and iCloud Drive, so a library folder kept in iCloud Drive is shared between the two. It offers a syntax-highlighted editor with the same formatting toolbar, a live rendered preview beside it (**Editor**, **Split** or **Preview**), the dashboard, typewriter scrolling, the same themes and fonts, the cheat sheet, this guide, and HTML, PDF and RTF export with printing from the **More** menu. Images picked on iPad are saved beside the document when its folder has been opened once, and embedded in the text otherwise.
 
-Not yet on iPad: the editable rendered view, focus and composition modes, the library sidebar, versions and Word export.
+Not yet on iPad: the editable formatted view, focus and composition modes, the library sidebar, versions and Word export.
 
 ---
 

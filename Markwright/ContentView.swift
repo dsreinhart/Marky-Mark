@@ -9,10 +9,11 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
-/// Which face of the single editor pane is showing.
+/// Which editors are showing: the Markdown source, the formatted text, or both side by side.
 enum EditorMode: String, CaseIterable, Identifiable {
-    case rendered
     case raw
+    case dual
+    case rendered
 
     var id: String { rawValue }
 }
@@ -112,22 +113,35 @@ struct ContentView: View {
         return options
     }
 
+    /// A pane needs this much room for its text to stay readable.
+    private var editorMinWidth: CGFloat { editorMode == .dual ? 720 : 460 }
+
     private var editorColumn: some View {
         VStack(spacing: 0) {
-            if editorMode == .rendered {
-                if !uiState.isComposing {
-                    FormattingToolbar(controller: controller, documentURL: document.fileURL)
+            if editorMode != .raw, !uiState.isComposing {
+                FormattingToolbar(controller: controller, documentURL: document.fileURL)
+                Divider()
+            }
+            // Each pane keeps its place in this structure, so one that stays on screen
+            // through a mode change is left alone rather than rebuilt.
+            HStack(spacing: 0) {
+                if editorMode != .rendered {
+                    MarkdownEditorView(text: $document.text, style: editorStyle, options: editorOptions, controller: controller)
+                        .frame(maxWidth: .infinity)
+                }
+                if editorMode == .dual {
                     Divider()
                 }
-                RichMarkdownEditorView(
-                    text: $document.text,
-                    style: editorStyle,
-                    options: editorOptions,
-                    baseURL: document.fileURL,
-                    controller: controller
-                )
-            } else {
-                MarkdownEditorView(text: $document.text, style: editorStyle, options: editorOptions, controller: controller)
+                if editorMode != .raw {
+                    RichMarkdownEditorView(
+                        text: $document.text,
+                        style: editorStyle,
+                        options: editorOptions,
+                        baseURL: document.fileURL,
+                        controller: controller
+                    )
+                    .frame(maxWidth: .infinity)
+                }
             }
 
             if !uiState.isComposing {
@@ -135,7 +149,7 @@ struct ContentView: View {
                 statusBar
             }
         }
-        .frame(minWidth: 460)
+        .frame(minWidth: editorMinWidth)
         .layoutPriority(1)
     }
 
@@ -165,7 +179,8 @@ struct ContentView: View {
     /// Carries out a search jump once the editor exists.
     private func performPendingJump() async {
         guard let request = document.pendingJump else { return }
-        for _ in 0..<20 where controller.activeTextView == nil {
+        // The editor has to exist and have finished any change of mode.
+        for _ in 0..<20 where controller.activeTextView == nil || controller.pendingPosition != nil {
             try? await Task.sleep(for: .milliseconds(50))
         }
         Self.setFindString(request.text)
@@ -195,7 +210,7 @@ struct ContentView: View {
             }
         }
         .toolbar(uiState.isComposing ? .hidden : .visible, for: .windowToolbar)
-        .frame(minWidth: 460 + (viewSettings.showLibrary && !uiState.isComposing ? 251 : 0)
+        .frame(minWidth: editorMinWidth + (viewSettings.showLibrary && !uiState.isComposing ? 251 : 0)
                          + (viewSettings.showDashboard && !uiState.isComposing ? 271 : 0),
                minHeight: 400)
         .toolbar {
@@ -210,11 +225,13 @@ struct ContentView: View {
 
             ToolbarItem(placement: .principal) {
                 Picker("Mode", selection: $editorMode) {
-                    Label("Rendered", systemImage: "doc.richtext").tag(EditorMode.rendered)
                     Label("Raw", systemImage: "chevron.left.forwardslash.chevron.right").tag(EditorMode.raw)
+                    Label("Dual", systemImage: "rectangle.split.2x1").tag(EditorMode.dual)
+                    Label("Formatted", systemImage: "doc.richtext").tag(EditorMode.rendered)
                 }
                 .pickerStyle(.segmented)
-                .help("Switch between the rendered editor and raw Markdown")
+                .labelStyle(.titleAndIcon)
+                .help("Show the Markdown source, both side by side, or the formatted text")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
@@ -290,13 +307,29 @@ struct ContentView: View {
 
     // MARK: - Status bar
 
+    private var statusSymbol: String {
+        switch editorMode {
+        case .raw: return "chevron.left.forwardslash.chevron.right"
+        case .dual: return "rectangle.split.2x1"
+        case .rendered: return "doc.richtext"
+        }
+    }
+
+    private var statusName: String {
+        switch editorMode {
+        case .raw: return "Raw Markdown"
+        case .dual: return "Dual"
+        case .rendered: return "Formatted"
+        }
+    }
+
     private var statusBar: some View {
         let stats = TextStatistics.compute(markdown: document.text)
         let goal = GoalStore.shared.goal(for: document.goalKey)
         return HStack {
-            Image(systemName: editorMode == .rendered ? "doc.richtext" : "chevron.left.forwardslash.chevron.right")
+            Image(systemName: statusSymbol)
                 .foregroundStyle(.secondary)
-            Text(editorMode == .rendered ? "Rendered" : "Raw Markdown")
+            Text(statusName)
                 .foregroundStyle(.secondary)
             if ViewSettings.shared.focusMode != .off {
                 Text("· Focus: \(ViewSettings.shared.focusMode.label)").foregroundStyle(.tertiary)
@@ -336,7 +369,7 @@ struct ContentView: View {
     static let sampleMarkdown = """
 # Welcome to Markwright
 
-A Markdown editor with a **rendered** view you can *edit directly* and a ***raw*** view for hand-written markup.
+A Markdown editor with a **formatted** view you can *edit directly*, a ***raw*** view for hand-written markup, and a dual view with both.
 
 ## Text Formatting
 
@@ -377,7 +410,7 @@ Nested list:
 ## Task Lists
 
 - [x] Build the raw Markdown editor
-- [x] Build the rendered editor
+- [x] Build the formatted editor
 - [x] Add a formatting toolbar
 - [x] Support full Markdown syntax
 - [ ] Take over the world

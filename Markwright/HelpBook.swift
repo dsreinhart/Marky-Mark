@@ -20,6 +20,14 @@ enum HelpBook {
         DocumentStore.supportFolder.appending(path: fileName)
     }
 
+    /// Brings the installed copy up to date before the session is restored, so a guide tab
+    /// reopened from last time shows this version of the app's guide.
+    static func refreshInstalledCopy() {
+        guard FileManager.default.fileExists(atPath: installedURL.path),
+              let source = bundledURL, let data = try? Data(contentsOf: source) else { return }
+        try? data.write(to: installedURL, options: .atomic)
+    }
+
     /// The guide as a document, refreshed from the bundle unless it is already open in a tab.
     static func document() -> Document? {
         let store = DocumentStore.shared

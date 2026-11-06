@@ -48,8 +48,14 @@ enum MarkdownBlock: Identifiable {
 struct MarkdownParser {
 
     static func parse(_ input: String) -> [MarkdownBlock] {
+        parseWithLines(input).map(\.block)
+    }
+
+    /// Blocks with the source lines each one came from (`lines` is a half-open range).
+    static func parseWithLines(_ input: String) -> [(block: MarkdownBlock, lines: Range<Int>)] {
         let lines = input.components(separatedBy: "\n")
         var blocks: [MarkdownBlock] = []
+        var spans: [Range<Int>] = []
         var i = 0
 
         // YAML front matter: a `---` fence on the very first line closed by another `---`.
@@ -57,10 +63,13 @@ struct MarkdownParser {
             if let close = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
                 blocks.append(.frontMatter(text: lines[1..<close].joined(separator: "\n")))
                 i = close + 1
+                spans.append(0..<i)
             }
         }
 
         while i < lines.count {
+            let blockStart = i
+            defer { if blocks.count > spans.count { spans.append(blockStart..<i) } }
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
@@ -241,7 +250,7 @@ struct MarkdownParser {
             blocks.append(.paragraph(text: paragraphLines.joined(separator: " ")))
         }
 
-        return blocks
+        return Array(zip(blocks, spans)).map { (block: $0.0, lines: $0.1) }
     }
 
     // MARK: - Table row parsing

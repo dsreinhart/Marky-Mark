@@ -70,10 +70,11 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.baseURL = baseURL
         context.coordinator.load(text)
+        controller.editorsWillChange()
+        if controller.pendingPosition != nil { scrollView.alphaValue = 0 }
         controller.coordinator = context.coordinator
+        textView.onTakeFocus = { [weak controller] view in controller?.paneDidTakeFocus(view) }
         controller.refreshActive()
-        controller.jumpToHeading = { [weak coordinator = context.coordinator] index in coordinator?.jumpToHeading(index) }
-        controller.splitAtCursor = { [weak coordinator = context.coordinator] in coordinator?.splitAtCursor() }
         return scrollView
     }
 
@@ -89,7 +90,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             }
         }
         if text != coordinator.lastKnownText {
-            coordinator.load(text)
+            coordinator.receive(text)
+        } else {
+            coordinator.cancelPendingText()
         }
         if let textView = coordinator.textView, textView.options != options {
             textView.options = options
@@ -98,7 +101,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.cancelPendingText()
         if coordinator.parent.controller.coordinator === coordinator {
+            coordinator.parent.controller.editorsWillChange()
             coordinator.parent.controller.coordinator = nil
             coordinator.parent.controller.refreshActive()
         }
@@ -145,6 +150,12 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         weak var textView: RichTextView?
         var baseURL: URL?
         private(set) var lastKnownText = ""
+        /// Connects `lastKnownText` to the text in the view.
+        private(set) var sourceMap = SourceMap()
+        /// Separate from the window's, so the two panes of dual mode keep separate histories.
+        private let undo = UndoManager()
+        private var pendingText: String? = nil
+        private var pendingTask: Task<Void, Never>? = nil
 
         private var batchDepth = 0
         private var isFinishing = false
@@ -178,7 +189,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         func load(_ markdown: String) {
             guard let textView, let storage else { return }
             isLoading = true
-            storage.setAttributedString(renderer.render(markdown))
+            let rendered = renderer.renderMapped(markdown)
+            storage.setAttributedString(rendered.text)
+            sourceMap = rendered.map
             renumberOrderedLists()
             isLoading = false
             textView.undoManager?.removeAllActions()
@@ -190,6 +203,117 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             pendingEditedRange = nil
             loadImages()
             refreshState()
+        }
+
+        func undoManager(for view: NSTextView) -> UndoManager? { undo }
+
+        // MARK: Text from elsewhere
+
+        /// New text that did not come from typing here. In dual mode, the pane without the cursor
+        /// waits for a pause so that fast typing in the other pane stays fast.
+        func receive(_ markdown: String) {
+            let controller = parent.controller
+            guard controller.isDual, textView?.window?.firstResponder !== textView else {
+                load(markdown)
+                return
+            }
+            guard pendingText != markdown else { return }
+            pendingText = markdown
+            pendingTask?.cancel()
+            pendingTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                self?.flushPendingText()
+            }
+        }
+
+        func flushPendingText() {
+            pendingTask?.cancel()
+            pendingTask = nil
+            guard let markdown = pendingText else { return }
+            pendingText = nil
+            if markdown != lastKnownText { reload(markdown) }
+        }
+
+        func cancelPendingText() {
+            pendingTask?.cancel()
+            pendingTask = nil
+            pendingText = nil
+        }
+
+        /// Replaces the text while the other pane is being edited: the view stays where it is.
+        func reload(_ markdown: String) {
+            guard let textView, let storage else { return }
+            let clip = textView.enclosingScrollView?.contentView
+            let origin = clip?.bounds.origin
+            let selection = textView.selectedRange
+            let folds = foldedHeadingOrdinals()
+
+            isLoading = true
+            let rendered = renderer.renderMapped(markdown)
+            storage.setAttributedString(rendered.text)
+            sourceMap = rendered.map
+            renumberOrderedLists()
+            let location = min(selection.location, length)
+            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+            isLoading = false
+
+            // The old history describes text that is gone.
+            textView.undoManager?.removeAllActions()
+            typingOverride = nil
+            textView.typingAttributes = typingAttributes(at: location)
+            lastKnownText = markdown
+            pendingEditedRange = nil
+            restoreFolds(ordinals: folds)
+            loadImages()
+            if let clip, let origin, let scrollView = textView.enclosingScrollView {
+                clip.scroll(to: origin)
+                scrollView.reflectScrolledClipView(clip)
+            }
+            parent.controller.paneSync.resync()
+        }
+
+        /// A range to select or flash, moved off a list marker or footnote label onto the text itself.
+        func visibleRange(for range: NSRange) -> NSRange {
+            guard let storage, range.location < length else { return range }
+            guard storage.attribute(.mmMarker, at: range.location, effectiveRange: nil) as? Bool == true else { return range }
+            return contentRange(ofParagraph: paragraphRange(at: range.location))
+        }
+
+        /// Which headings are folded, by their order in the document (their positions are about to change).
+        private func foldedHeadingOrdinals() -> Set<Int> {
+            guard !foldedHeadings.isEmpty else { return [] }
+            var ordinals: Set<Int> = []
+            var ordinal = 0
+            var location = 0
+            while location < length {
+                let paragraph = paragraphRange(at: location)
+                if paragraph.length == 0 { break }
+                if case .heading = blockInfo(forParagraph: paragraph).kind {
+                    if foldedHeadings.contains(paragraph.location) { ordinals.insert(ordinal) }
+                    ordinal += 1
+                }
+                location = NSMaxRange(paragraph)
+            }
+            return ordinals
+        }
+
+        private func restoreFolds(ordinals: Set<Int>) {
+            foldedHeadings = []
+            foldedRanges = []
+            guard !ordinals.isEmpty else { return }
+            var ordinal = 0
+            var location = 0
+            while location < length {
+                let paragraph = paragraphRange(at: location)
+                if paragraph.length == 0 { break }
+                if case .heading = blockInfo(forParagraph: paragraph).kind {
+                    if ordinals.contains(ordinal) { foldedHeadings.insert(paragraph.location) }
+                    ordinal += 1
+                }
+                location = NSMaxRange(paragraph)
+            }
+            recomputeFolds()
         }
 
         func restyleAll() {
@@ -238,8 +362,10 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         func applyBehaviors() {
             guard let textView else { return }
             let options = textView.options
-            EditorBehaviors.applyFocus(textView, mode: options.focus, dimColor: engine.style.textColor.withAlphaComponent(0.28))
-            if options.typewriter {
+            // In dual mode these follow the cursor, which is only in one pane.
+            let isPassive = parent.controller.isDual && textView.window?.firstResponder !== textView
+            EditorBehaviors.applyFocus(textView, mode: isPassive ? .off : options.focus, dimColor: engine.style.textColor.withAlphaComponent(0.28))
+            if options.typewriter, !isPassive {
                 EditorBehaviors.typewriterScroll(textView)
             }
         }
@@ -276,7 +402,8 @@ struct RichMarkdownEditorView: NSViewRepresentable {
 
         private func publish() {
             guard let storage else { return }
-            let markdown = MarkdownSerializer.markdown(from: storage)
+            let (markdown, map) = MarkdownSerializer.serialize(storage)
+            sourceMap = map
             if markdown != lastKnownText {
                 lastKnownText = markdown
                 parent.text = markdown
@@ -1754,11 +1881,18 @@ struct RichMarkdownEditorView: NSViewRepresentable {
 
         func loadImages() {
             guard let storage else { return }
+            var pendingCachedImages: [(NSImage, MarkdownImageAttachment)] = []
+            defer { for (image, attachment) in pendingCachedImages { apply(image: image, to: attachment) } }
             storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
                 guard let attachment = value as? MarkdownImageAttachment, !attachment.loadRequested else { return }
                 attachment.loadRequested = true
                 let source = attachment.source
                 let base = baseURL
+                // A known image goes straight in, so reloading while the other pane is edited doesn't flicker.
+                if let cached = ImageLoader.shared.cachedImage(for: source, baseURL: base) {
+                    pendingCachedImages.append((cached, attachment))
+                    return
+                }
                 Task { [weak self] in
                     guard let image = await ImageLoader.shared.image(for: source, baseURL: base) else { return }
                     self?.apply(image: image, to: attachment)
@@ -1802,6 +1936,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
 
         func refreshState() {
             guard let textView, let storage else { return }
+            if parent.controller.rawHasFocus, parent.controller.isDual { return }
             let selection = textView.selectedRange
             let paragraph = paragraphRange(at: selection.location)
             let block = blockInfo(forParagraph: paragraph)

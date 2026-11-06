@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEOpenDocuments)
         )
         UserDefaults.standard.register(defaults: ["NSQuitAlwaysKeepsWindows": false])
+        HelpBook.refreshInstalledCopy()
         NSWindow.allowsAutomaticWindowTabbing = true
     }
 
