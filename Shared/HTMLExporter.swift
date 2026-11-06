@@ -10,7 +10,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum ExportStyle: String, CaseIterable, Identifiable {
-    case clean, classic, modern, manuscript
+    case clean, classic, modern, book, report, academic, technical, manuscript
 
     var id: String { rawValue }
 
@@ -19,6 +19,10 @@ enum ExportStyle: String, CaseIterable, Identifiable {
         case .clean: return "Clean"
         case .classic: return "Classic"
         case .modern: return "Modern"
+        case .book: return "Book"
+        case .report: return "Report"
+        case .academic: return "Academic"
+        case .technical: return "Technical"
         case .manuscript: return "Manuscript"
         }
     }
@@ -70,6 +74,68 @@ enum ExportStyle: String, CaseIterable, Identifiable {
             h1, h2, h3, h4, h5, h6 { font-weight: 600; margin: 2em 0 0.6em; text-transform: none; letter-spacing: 0.01em; }
             h1 { font-size: 2.4em; font-weight: 300; margin-top: 0; } h2 { font-size: 1.4em; color: #0a5bd8; } h3 { font-size: 1.1em; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
             blockquote { border-left-color: #0a5bd8; }
+            """
+        case .book:
+            return shared + """
+            body { font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif; font-size: 18px; line-height: 1.6; max-width: 34em; }
+            h1, h2, h3, h4, h5, h6 { font-weight: 400; text-align: center; line-height: 1.25; margin: 2em 0 0.8em; }
+            h1 { font-size: 2em; letter-spacing: 0.02em; margin-top: 0.5em; } h2 { font-size: 1.35em; } h3 { font-size: 1.1em; font-style: italic; }
+            h4, h5, h6 { font-size: 1em; font-style: italic; }
+            p { margin: 0; text-align: justify; hyphens: auto; text-indent: 1.5em; }
+            body > p:first-child, h1 + p, h2 + p, h3 + p, h4 + p, h5 + p, h6 + p, hr + p, blockquote + p, ul + p, ol + p, pre + p, table + p { text-indent: 0; }
+            blockquote p, li p, td p { text-indent: 0; }
+            blockquote { border-left: 0; padding: 0 1.5em; color: inherit; font-size: 0.95em; }
+            ul, ol { margin: 1em 0; }
+            li ul, li ol { margin: 0; }
+            hr { width: 30%; margin: 2em auto; }
+            a { color: inherit; }
+            """
+        case .report:
+            return shared + """
+            body { font-family: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.55; max-width: 48em; }
+            h1, h2, h3, h4, h5, h6 { color: #1f3a5f; line-height: 1.25; margin: 1.6em 0 0.5em; }
+            h1 { font-size: 2em; font-weight: 700; margin-top: 0; padding-bottom: 0.25em; border-bottom: 3px solid #1f3a5f; }
+            h2 { font-size: 1.4em; font-weight: 600; padding-bottom: 0.2em; border-bottom: 1px solid #c8d2df; }
+            h3 { font-size: 1.1em; font-weight: 600; } h4, h5, h6 { font-size: 1em; font-weight: 600; }
+            p { margin: 0 0 0.9em; }
+            th { background: #e6ecf3; color: #1f3a5f; font-weight: 600; border-color: #c8d2df; }
+            td { border-color: #c8d2df; }
+            tr:nth-child(even) td { background: #f6f8fb; }
+            blockquote { border-left-color: #1f3a5f; background: #f6f8fb; color: inherit; padding: 0.6em 1.2em; }
+            blockquote p { margin: 0; }
+            a { color: #1f3a5f; }
+            """
+        case .academic:
+            return shared + """
+            body { font-family: "Times New Roman", Times, serif; font-size: 12pt; line-height: 1.5; max-width: 6.5in; }
+            h1, h2, h3, h4, h5, h6 { font-size: 12pt; font-weight: 700; margin: 1.5em 0 0.5em; }
+            h1 { font-size: 14pt; text-align: center; margin-top: 0; } h3 { font-style: italic; } h4, h5, h6 { font-weight: 400; font-style: italic; }
+            p { margin: 0 0 0.75em; }
+            blockquote { border-left: 0; margin: 1em 0 1em 0.5in; padding: 0; color: inherit; }
+            table { border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; }
+            th, td { border: 0; }
+            th { background: none; border-bottom: 1px solid #000; }
+            pre { background: none; border: 1px solid #999; border-radius: 0; }
+            p code, li code, td code { background: none; padding: 0; }
+            a { color: inherit; }
+            section.footnotes { color: inherit; font-size: 10pt; }
+            """
+        case .technical:
+            return shared + """
+            body { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6; max-width: 52em; }
+            h1, h2, h3, h4, h5, h6 { font-weight: 600; line-height: 1.25; margin: 1.5em 0 0.5em; }
+            h1 { font-size: 1.9em; margin-top: 0; padding-bottom: 0.25em; border-bottom: 1px solid #d0d7de; }
+            h2 { font-size: 1.45em; padding-bottom: 0.2em; border-bottom: 1px solid #d0d7de; }
+            h3 { font-size: 1.15em; } h4, h5, h6 { font-size: 1em; }
+            p { margin: 0 0 0.9em; }
+            pre { background: #f6f8fa; border: 1px solid #d0d7de; border-left: 3px solid #0969da; border-radius: 4px; }
+            p code, li code, td code { background: #eff1f3; color: #1f2328; }
+            th { background: #f6f8fa; font-weight: 600; border-color: #d0d7de; }
+            td { border-color: #d0d7de; }
+            tr:nth-child(even) td { background: #f9fafb; }
+            blockquote { border-left-color: #0969da; color: #4a5560; }
+            blockquote p { margin: 0; }
+            a { color: #0969da; }
             """
         case .manuscript:
             return shared + """

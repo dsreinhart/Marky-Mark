@@ -341,7 +341,20 @@ Settings apply to every window immediately. The iPad app has the same settings s
 
 ## 10. Export and print
 
-**File > Export Preview…** (⌘⇧E) shows the document as it will export, in one of four styles: **Clean**, **Classic**, **Modern** and **Manuscript**. From the preview, or directly from **File > Export**, you can produce:
+**File > Export Preview…** (⌘⇧E) shows the document as it will export, in one of eight styles:
+
+- **Clean**, the default: a plain modern look in the system font.
+- **Classic**: Georgia serif with justified text and italic quotes.
+- **Modern**: a light sans-serif with blue accents.
+- **Book**: an old-style serif with indented, justified paragraphs and centred headings.
+- **Report**: a business look with navy headings and shaded tables.
+- **Academic**: Times New Roman at 12 points and 1.5 line spacing, with ruled tables.
+- **Technical**: documentation-style headings with clearly marked code blocks and tables.
+- **Manuscript**: Courier at 12 points, double spaced, with indented paragraphs.
+
+These are ready-made looks, not formal standards. Academic doesn't apply APA or MLA rules, and Manuscript has no title page or running header, so check any submission against its own requirements. Markwright remembers the style you last picked.
+
+ From the preview, or directly from **File > Export**, you can produce:
 
 - **HTML**, a single file with its styles inline.
 - **PDF**, paginated from the same styled HTML.
