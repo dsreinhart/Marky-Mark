@@ -50,7 +50,7 @@ struct QuickOpenView: View {
     }
 
     /// Subsequence match with a bonus for consecutive and word-start hits.
-    private static func fuzzyScore(_ query: String, in text: String) -> Int? {
+    static func fuzzyScore(_ query: String, in text: String) -> Int? {
         var score = 0
         var index = text.startIndex
         var previous: String.Index? = nil
