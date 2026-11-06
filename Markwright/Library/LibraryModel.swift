@@ -337,13 +337,28 @@ final class LibraryModel {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         var target = node.url.deletingLastPathComponent().appending(path: trimmed)
-        if !node.isFolder, target.pathExtension.isEmpty { target = target.appendingPathExtension(node.url.pathExtension) }
+        // A dot alone doesn't make an extension: "Notes v1.2" is still a Markdown sheet.
+        if !node.isFolder, !Self.markdownExtensions.contains(target.pathExtension.lowercased()) {
+            target = target.appendingPathExtension(node.url.pathExtension)
+        }
         do {
             try FileManager.default.moveItem(at: node.url, to: target)
+            carryOver(from: node, to: target)
             scheduleRefresh()
             return target
         } catch {
             return nil
+        }
+    }
+
+    /// Version history and goals are stored by path, for every sheet at or below a renamed item.
+    private func carryOver(from node: LibraryNode, to target: URL) {
+        let oldPath = Document.stablePath(node.url)
+        for file in node.allFiles {
+            let path = Document.stablePath(file.url)
+            let moved = path == oldPath ? target : target.appending(path: String(path.dropFirst(oldPath.count + 1)))
+            Document.moveVersions(from: file.url, to: moved)
+            GoalStore.shared.rename(from: path, to: Document.stablePath(moved))
         }
     }
 

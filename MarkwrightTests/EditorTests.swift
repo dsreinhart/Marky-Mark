@@ -88,6 +88,17 @@ struct FormattedEditorTests {
         #expect(editor.text.hasPrefix("A ==word==[^1] here.") || editor.text.hasPrefix("A ==word[^1]== here."))
     }
 
+    /// A change from another device mustn't throw away the cursor or the place in the document.
+    @Test func textArrivingFromElsewhereKeepsTheCursor() {
+        let editor = FormattedEditor()
+        editor.load("First paragraph.\n\nSecond paragraph.")
+        editor.cursor(after: "Second")
+        let cursor = editor.textView.selectedRange()
+        editor.coordinator.receive("First paragraph.\n\nSecond paragraph, longer now.")
+        #expect(editor.textView.string.contains("longer now"))
+        #expect(editor.textView.selectedRange() == cursor)
+    }
+
     @Test func foldingCoversTheSectionOnly() {
         let editor = FormattedEditor()
         editor.load("# One\n\nbody one\n\n## Sub\n\nsub body\n\n# Two\n\nbody two")

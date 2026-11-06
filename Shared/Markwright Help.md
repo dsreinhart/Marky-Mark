@@ -226,13 +226,19 @@ A document that has a file saves itself about a second and a half after you stop
 
 If a file can no longer be written (for example its folder was removed), Markwright tells you and offers Save As.
 
+### Changes from other devices
+
+If a file you have open changes somewhere else, for example on your iPad through iCloud Drive, Markwright shows the new text within a few seconds, as long as you haven't edited it here. The text it replaces stays in **File > Revert To**.
+
+If you were editing it too, Markwright asks which version to keep. The version you don't choose also stays in **File > Revert To**, so neither is lost.
+
 ### Versions
 
-**File > Save a Version** (⌥⌘S) snapshots the current text. **File > Revert To** lists **Last Opened**, which restores the text as it was when you opened the file this session, followed by every saved version by date. Up to fifty versions are kept per file. Versions are stored in Markwright's own support folder, not beside your documents, and the file on disk is untouched until you revert.
+**File > Save a Version** (⌥⌘S) snapshots the current text. **File > Revert To** lists **Last Opened**, which restores the text as it was when you opened the file this session, followed by every saved version by date. Up to fifty versions are kept per file, and they follow the file when you rename it. Versions are stored in Markwright's own support folder, not beside your documents, and the file on disk is untouched until you revert.
 
 ### Line endings, encodings and the byte-order mark
 
-Markwright keeps files the way it found them. A file saved with Windows (CRLF) or classic Mac (CR) line endings, or with a UTF-8 byte-order mark, is written back the same way. Files that are not valid UTF-8 are read as Windows-1252 so nothing is lost, and new files are written as UTF-8 with Unix line endings.
+Markwright keeps files the way it found them. A file saved with Windows (CRLF) or classic Mac (CR) line endings, or with a UTF-8 byte-order mark, is written back the same way. UTF-16 and UTF-32 files are recognised and saved back in the same encoding. Files that are none of these are read as Windows-1252 so nothing is lost, and saved as UTF-8. New files are written as UTF-8 with Unix line endings.
 
 ### Making Markwright the default Markdown app
 

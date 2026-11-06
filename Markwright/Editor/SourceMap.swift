@@ -114,36 +114,26 @@ nonisolated struct SourceMap {
         return NSRange(location: start, length: max(end - start, 0))
     }
 
-    /// The formatted text of a search match in the source: the same occurrence of `needle` within
-    /// the same block when it is visible there (a word can also occur inside a hidden link address).
+    /// The formatted text of a search match in the source: the occurrence of `needle` in the same block
+    /// nearest to where the match maps. Counting occurrences wouldn't do, because a word can also be
+    /// hidden inside a link address. A match with no visible counterpart shows as nearly as it can.
     func renderedMatch(forRaw range: NSRange, needle: String, options: NSString.CompareOptions,
                        raw: NSString, rendered: NSString) -> NSRange {
-        if let index = lastEntry(where: { $0.raw.location <= range.location }),
-           NSMaxRange(range) <= NSMaxRange(entries[index].raw) {
-            let entry = entries[index]
-            var earlier = 0
-            var search = entry.raw.location
-            while search < range.location {
-                let hit = raw.range(of: needle, options: options, range: NSRange(location: search, length: range.location - search))
-                if hit.location == NSNotFound { break }
-                earlier += 1
-                search = NSMaxRange(hit)
-            }
-            search = entry.rendered.location
-            var count = 0
-            while search < NSMaxRange(entry.rendered) {
-                let hit = rendered.range(of: needle, options: options,
-                                         range: NSRange(location: search, length: NSMaxRange(entry.rendered) - search))
-                if hit.location == NSNotFound { break }
-                if count == earlier { return hit }
-                count += 1
-                search = NSMaxRange(hit)
-            }
-        }
         let mapped = renderedRange(forRaw: range, raw: raw, rendered: rendered)
-        if mapped.length > 0 { return mapped }
-        if let index = lastEntry(where: { $0.raw.location <= range.location }) { return entries[index].rendered }
-        return mapped
+        guard let index = lastEntry(where: { $0.raw.location <= range.location }),
+              NSMaxRange(range) <= NSMaxRange(entries[index].raw) else { return mapped }
+        let entry = entries[index]
+        var best: NSRange? = nil
+        var search = entry.rendered.location
+        while search < NSMaxRange(entry.rendered) {
+            let hit = rendered.range(of: needle, options: options,
+                                     range: NSRange(location: search, length: NSMaxRange(entry.rendered) - search))
+            if hit.location == NSNotFound { break }
+            if abs(hit.location - mapped.location) < abs((best?.location ?? Int.max / 2) - mapped.location) { best = hit }
+            search = NSMaxRange(hit)
+        }
+        if let best { return best }
+        return mapped.length > 0 ? mapped : entry.rendered
     }
 
     // MARK: Internals

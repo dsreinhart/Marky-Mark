@@ -4,9 +4,7 @@
 //
 //  The code that reads and writes people's files. These share app-wide state (the document
 //  store, library and goals), so the whole group runs one test at a time. All files live in
-//  temporary folders. Where a test is marked as a known issue, the behaviour it describes is
-//  what the app should do and doesn't yet; the mark makes the test fail once it's fixed, as a
-//  reminder to remove the mark.
+//  temporary folders.
 //
 
 import AppKit
@@ -63,13 +61,50 @@ extension FileHandling {
             #expect(decoded.format.encode(decoded.text) == Data(text.utf8))
         }
 
-        /// UTF-16 files, common from older Windows tools, are read byte by byte as Windows-1252:
-        /// the text shows as garbage, and the next save writes that garbage over the file.
-        @Test func utf16TextIsReadCorrectly() {
-            let bytes = "hello".data(using: .utf16)!   // includes a byte-order mark
-            withKnownIssue("UTF-16 is not recognised") {
-                #expect(TextFileFormat.decode(bytes).text == "hello")
-            }
+        @Test(arguments: [
+            (TextFileFormat.Encoding.utf16LE, true), (.utf16BE, true), (.utf32LE, true), (.utf32BE, true),
+        ])
+        func markedEncodingsRoundTrip(encoding: TextFileFormat.Encoding, marked: Bool) throws {
+            let text = "Caf\u{e9} \u{1F389} line\nsecond"
+            let bytes = encoding.bom + (try #require(text.data(using: encoding.swiftEncoding)))
+            let decoded = TextFileFormat.decode(bytes)
+            #expect(decoded.text == text)
+            #expect(decoded.format.encoding == encoding)
+            #expect(decoded.format.hasBOM == marked)
+            #expect(decoded.format.encode(decoded.text) == bytes, "saved back byte for byte")
+        }
+
+        @Test func utf16WithWindowsLineEndingsRoundTrips() throws {
+            let bytes = TextFileFormat.Encoding.utf16LE.bom + (try #require("a\r\nb".data(using: .utf16LittleEndian)))
+            let decoded = TextFileFormat.decode(bytes)
+            #expect(decoded.text == "a\nb")
+            #expect(decoded.format.lineEnding == .crlf)
+            #expect(decoded.format.encode(decoded.text) == bytes)
+        }
+
+        @Test(arguments: [TextFileFormat.Encoding.utf16LE, .utf16BE])
+        func unmarkedUTF16IsRecognised(encoding: TextFileFormat.Encoding) throws {
+            let bytes = try #require("Plain Latin text here".data(using: encoding.swiftEncoding))
+            let decoded = TextFileFormat.decode(bytes)
+            #expect(decoded.text == "Plain Latin text here")
+            #expect(decoded.format.encoding == encoding)
+            #expect(!decoded.format.hasBOM)
+            #expect(decoded.format.encode(decoded.text) == bytes)
+        }
+
+        @Test(arguments: ["Plain text", "Caf\u{e9} na\u{ef}ve \u{1F389}", "ab", "abcd"])
+        func ordinaryUTF8IsNotMistakenForUTF16(text: String) {
+            let decoded = TextFileFormat.decode(Data(text.utf8))
+            #expect(decoded.text == text)
+            #expect(decoded.format.encoding == .utf8)
+        }
+
+        @Test func truncatedUTF16DoesNotLoseTheFile() {
+            // A mark with an odd number of bytes after it can't be UTF-16; it must still open.
+            let decoded = TextFileFormat.decode(TextFileFormat.Encoding.utf16LE.bom + Data([0x41]))
+            #expect(decoded.format.encoding == .utf8)
+            #expect(!decoded.format.hasBOM, "a save mustn't add a marker that wasn't really there")
+            #expect(decoded.text.hasSuffix("A"))
         }
     }
 }
@@ -222,25 +257,142 @@ extension FileHandling {
             #expect(before == after)
         }
 
-        /// A file changed elsewhere, such as on the iPad through iCloud Drive, is overwritten by
-        /// the next save here, and the other copy can't be recovered from version history.
-        @Test func saveDoesNotDestroyChangesMadeElsewhere() throws {
+        @Test func utf16FileIsEditedAndSavedInPlace() throws {
+            let folder = TempFolder()
+            let original = TextFileFormat.Encoding.utf16LE.bom + (try #require("one\ntwo".data(using: .utf16LittleEndian)))
+            let file = folder.write(bytes: original, to: "wide.md")
+            let document = try Document.open(url: file)
+            #expect(document.text == "one\ntwo")
+            document.text = "one\ntwo\nthree"
+            document.textDidChange()
+            #expect(document.save())
+            let expected = TextFileFormat.Encoding.utf16LE.bom + (try #require("one\ntwo\nthree".data(using: .utf16LittleEndian)))
+            #expect(try Data(contentsOf: file) == expected)
+        }
+
+        /// Someone else writes the file. The date is moved on so a same-second write still counts.
+        private func writeElsewhere(_ text: String, to file: URL, secondsLater: Double = 5) throws {
+            try text.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(secondsLater)], ofItemAtPath: file.path)
+        }
+
+        private func history(_ document: Document) -> [String] {
+            document.versions.compactMap { try? String(contentsOf: $0.url, encoding: .utf8) }
+        }
+
+        @Test func saveKeepsTextWrittenElsewhere() throws {
             let folder = TempFolder()
             let file = folder.write("original", to: "shared.md")
             let document = try Document.open(url: file)
-            try "written on the iPad".write(to: file, atomically: true, encoding: .utf8)
+            var reported: String? = nil
+            document.onExternalConflict = { _, other in reported = other }
+            try writeElsewhere("written on the iPad", to: file)
 
             document.text = "typed on the Mac"
             document.textDidChange()
-            _ = document.save()
+            #expect(document.save())
+            #expect(history(document).contains("written on the iPad"), "the other device's text is recoverable")
+            #expect(reported == "written on the iPad", "and the owner is told")
+            #expect(folder.read("shared.md") == "typed on the Mac")
+        }
 
-            let onDisk = folder.read("shared.md")
-            let inHistory = document.versions.contains {
-                (try? String(contentsOf: $0.url, encoding: .utf8)) == "written on the iPad"
-            }
-            withKnownIssue("The other device's text is lost") {
-                #expect(onDisk == "written on the iPad" || inHistory)
-            }
+        @Test func untouchedDocumentFollowsChangesElsewhere() throws {
+            let folder = TempFolder()
+            let file = folder.write("original", to: "shared.md")
+            let document = try Document.open(url: file)
+            try writeElsewhere("from the iPad", to: file)
+
+            #expect(document.checkForExternalChange() == .reloaded)
+            #expect(document.text == "from the iPad")
+            #expect(!document.hasUnsavedChanges)
+            #expect(history(document).contains("original"), "what it replaced is kept")
+            #expect(document.checkForExternalChange() == .none)
+            #expect(folder.read("shared.md") == "from the iPad", "reloading doesn't write")
+        }
+
+        @Test func nothingChangedMeansNothingHappens() throws {
+            let folder = TempFolder()
+            let document = try Document.open(url: folder.write("same", to: "a.md"))
+            #expect(document.checkForExternalChange() == .none)
+            document.text = "mine"
+            document.textDidChange()
+            #expect(document.checkForExternalChange() == .none, "our own edits aren't a change elsewhere")
+            #expect(document.save())
+            #expect(document.checkForExternalChange() == .none, "nor is our own save")
+            #expect(document.text == "mine")
+        }
+
+        @Test func aFileTouchedButUnchangedIsNotAChange() throws {
+            let folder = TempFolder()
+            let file = folder.write("same", to: "a.md")
+            let document = try Document.open(url: file)
+            try writeElsewhere("same", to: file)
+            #expect(document.checkForExternalChange() == .none)
+        }
+
+        @Test func editsHereAndElsewhereAreAConflictNotALoss() throws {
+            let folder = TempFolder()
+            let file = folder.write("original", to: "shared.md")
+            let document = try Document.open(url: file)
+            var reports = 0
+            document.onExternalConflict = { _, _ in reports += 1 }
+            document.text = "my edit"
+            document.textDidChange()
+            try writeElsewhere("their edit", to: file)
+
+            #expect(document.checkForExternalChange() == .conflict)
+            #expect(document.text == "my edit", "what's being typed isn't replaced")
+            #expect(document.hasUnsavedChanges)
+            #expect(history(document).contains("their edit"))
+            #expect(reports == 1)
+            #expect(folder.read("shared.md") == "their edit", "nothing is overwritten by noticing")
+
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(9)], ofItemAtPath: file.path)
+            #expect(document.checkForExternalChange() == .none, "the same conflict is raised once")
+            #expect(document.save())
+            #expect(reports == 1, "saving after choosing doesn't raise it again")
+            #expect(folder.read("shared.md") == "my edit")
+        }
+
+        @Test func choosingTheOtherVersionKeepsMineInHistory() throws {
+            let folder = TempFolder()
+            let file = folder.write("original", to: "shared.md")
+            let document = try Document.open(url: file)
+            document.text = "my edit"
+            document.textDidChange()
+            try writeElsewhere("their edit", to: file)
+            #expect(document.checkForExternalChange() == .conflict)
+
+            document.useOtherVersion("their edit")
+            #expect(document.text == "their edit")
+            #expect(!document.hasUnsavedChanges)
+            #expect(folder.read("shared.md") == "their edit")
+            #expect(history(document).contains("my edit"))
+        }
+
+        @Test func bothSidesArrivingAtTheSameTextIsNotAConflict() throws {
+            let folder = TempFolder()
+            let file = folder.write("original", to: "shared.md")
+            let document = try Document.open(url: file)
+            document.text = "same result"
+            document.textDidChange()
+            try writeElsewhere("same result", to: file)
+            #expect(document.checkForExternalChange() == .none)
+            #expect(!document.hasUnsavedChanges)
+        }
+
+        @Test func deletedFileIsNotTreatedAsAChange() throws {
+            let folder = TempFolder()
+            let file = folder.write("original", to: "shared.md")
+            let document = try Document.open(url: file)
+            try FileManager.default.removeItem(at: file)
+            #expect(document.checkForExternalChange() == .none)
+            #expect(document.text == "original")
+        }
+
+        @Test func untitledHasNothingToCheck() {
+            TestEnvironment.prepare()
+            #expect(Document(text: "x").checkForExternalChange() == .none)
         }
 
         @Test func reopeningRestoresFromBookmark() throws {
@@ -426,7 +578,27 @@ extension FileHandling {
             #expect(content(of: two.versions[0]) == "in two")
         }
 
-        /// Renaming a file moves its goal but leaves its version history behind.
+        /// `standardizedFileURL` alone answers differently once a file has moved away.
+        @Test func storageKeysDoNotDependOnTheFileExisting() throws {
+            let folder = TempFolder()
+            let file = folder.write("x", to: "k.md")
+            let private1 = URL(fileURLWithPath: "/private" + Document.stablePath(file))
+            let before = Document.stablePath(private1)
+            try FileManager.default.removeItem(at: file)
+            #expect(Document.stablePath(private1) == before)
+            #expect(Document.stablePath(URL(fileURLWithPath: "/Users/a/b.md")) == "/Users/a/b.md", "ordinary paths keep their existing history")
+        }
+
+        @Test func versionsMadeInTheSameInstantAreAllKept() throws {
+            let folder = TempFolder()
+            let document = try Document.open(url: folder.write("start", to: "v.md"))
+            for index in 0..<20 {
+                document.text = "rapid \(index)"
+                document.saveVersion()
+            }
+            #expect(document.versions.count == 21)
+        }
+
         @Test func renamingKeepsTheVersionHistory() throws {
             let folder = TempFolder()
             let file = folder.write("text", to: "before.md")
@@ -435,9 +607,27 @@ extension FileHandling {
             let target = folder.url.appending(path: "after.md")
             try FileManager.default.moveItem(at: file, to: target)
             document.fileMoved(to: target)
-            withKnownIssue("History stays under the old name") {
-                #expect(document.versions.count == 1)
-            }
+            #expect(document.versions.count == 1)
+            #expect(content(of: document.versions[0]) == "text")
+        }
+
+        /// The file was renamed in Finder while open: the next save notices.
+        @Test func renameBehindOurBackKeepsHistoryAndGoal() throws {
+            let folder = TempFolder()
+            let file = folder.write("text", to: "before.md")
+            let document = try Document.open(url: file)
+            GoalStore.shared.set(WritingGoal(target: 77), for: document.goalKey)
+            try FileManager.default.moveItem(at: file, to: folder.url.appending(path: "after.md"))
+
+            document.text = "edited"
+            document.textDidChange()
+            #expect(document.save())
+            #expect(document.title == "after.md")
+            #expect(folder.read("after.md") == "edited")
+            #expect(!folder.exists("before.md"), "the old name isn't recreated")
+            #expect(document.versions.contains { content(of: $0) == "text" })
+            #expect(GoalStore.shared.goal(for: document.goalKey)?.target == 77)
+            GoalStore.shared.set(nil, for: document.goalKey)
         }
     }
 }
@@ -782,21 +972,81 @@ extension FileHandling {
             #expect(folder.read("Renamed/In.md") == "inside")
         }
 
-        /// A dot in the new name counts as the extension, so "Notes v1.2" loses ".md" and the
-        /// sheet drops out of the library, though the file itself is still in the folder.
-        @Test func renameWithADotKeepsItASheet() async throws {
+        @Test(arguments: ["Notes v1.2", "Plan.final", "Dr. Who", "a.b.c"])
+        func dottedNameStaysASheet(name: String) async throws {
             let folder = TempFolder()
             folder.write("contents", to: "Notes.md")
             await open(folder)
-            let target = library.rename(try #require(node("Notes")), to: "Notes v1.2")
-            withKnownIssue("A dotted name loses .md") {
-                #expect(target?.lastPathComponent == "Notes v1.2.md")
-            }
+            let target = library.rename(try #require(node("Notes")), to: name)
+            #expect(target?.lastPathComponent == name + ".md")
             await rescan()
-            withKnownIssue("So the sheet disappears from the library") {
-                #expect(names().contains("Notes v1.2"))
-            }
-            if let target { #expect(FileManager.default.fileExists(atPath: target.path), "the file itself survives") }
+            #expect(names().contains(name), "still listed in the library")
+            #expect(folder.read(name + ".md") == "contents")
+        }
+
+        @Test(arguments: [("New.md", "New.md"), ("New.MD", "New.MD"), ("New.markdown", "New.markdown"), ("New.txt", "New.txt")])
+        func typingAMarkdownExtensionIsRespected(typed: String, expected: String) async throws {
+            let folder = TempFolder()
+            folder.write("contents", to: "Old.md")
+            await open(folder)
+            #expect(library.rename(try #require(node("Old")), to: typed)?.lastPathComponent == expected)
+        }
+
+        @Test func renamingASheetMovesItsHistoryAndGoal() async throws {
+            let folder = TempFolder()
+            let file = folder.write("text", to: "Old.md")
+            let before = try Document.open(url: file)
+            before.text = "an earlier version"
+            before.saveVersion()
+            GoalStore.shared.set(WritingGoal(target: 55), for: file.standardizedFileURL.path)
+            await open(folder)
+
+            let sheet = try #require(node("Old"))
+            let target = try #require(library.rename(sheet, to: "New"))
+            let reopened = try Document.open(url: target)
+            #expect(reopened.versions.contains { (try? String(contentsOf: $0.url, encoding: .utf8)) == "an earlier version" })
+            #expect(GoalStore.shared.goal(for: target.standardizedFileURL.path)?.target == 55)
+            #expect(GoalStore.shared.goal(for: file.standardizedFileURL.path) == nil)
+            GoalStore.shared.set(nil, for: target.standardizedFileURL.path)
+        }
+
+        @Test func renamingAGroupMovesHistoryForEverySheetInIt() async throws {
+            let folder = TempFolder()
+            let inner = folder.write("deep text", to: "Group/Sub/Deep.md")
+            let before = try Document.open(url: inner)
+            before.text = "an earlier version"
+            before.saveVersion()
+            await open(folder)
+
+            let group = try #require(library.root?.children?.first { $0.isFolder })
+            let target = try #require(library.rename(group, to: "Renamed"))
+            let reopened = try Document.open(url: target.appending(path: "Sub/Deep.md"))
+            #expect(reopened.versions.contains { (try? String(contentsOf: $0.url, encoding: .utf8)) == "an earlier version" })
+        }
+
+        @Test func openTabsFollowARename() async throws {
+            let folder = TempFolder()
+            let store = DocumentStore.shared
+            let sheet = folder.write("sheet", to: "Group/In.md")
+            let outside = folder.write("other", to: "Group Two/Out.md")
+            await open(folder)
+            let open1 = try #require(store.openDocument(at: sheet))
+            let open2 = try #require(store.openDocument(at: outside))
+
+            let group = folder.url.appending(path: "Group")
+            let target = folder.url.appending(path: "Renamed")
+            try FileManager.default.moveItem(at: group, to: target)
+            store.filesMoved(from: group, to: target)
+            #expect(open1.fileURL?.path == target.appending(path: "In.md").path)
+            #expect(open2.fileURL?.lastPathComponent == "Out.md", "a similar name isn't inside")
+            #expect(open2.fileURL?.path.contains("Group Two") == true)
+
+            open1.text = "edited"
+            open1.textDidChange()
+            #expect(open1.save())
+            #expect(folder.read("Renamed/In.md") == "edited")
+            store.windowWillClose(documentID: open1.id)
+            store.windowWillClose(documentID: open2.id)
         }
 
         @Test func picksUpFilesAddedElsewhere() async {

@@ -100,8 +100,40 @@ final class DocumentStore {
             self?.saveSession()
             if let url = document.fileURL { self?.noteRecent(url) }
         }
+        document.onExternalConflict = { [weak self] document, other in
+            // Reported from inside a save, so it waits for that to finish.
+            DispatchQueue.main.async { self?.askAboutConflict(document, other: other) }
+        }
         if let url = document.fileURL { noteRecent(url) }
         saveSession()
+    }
+
+    /// The same file changed here and elsewhere. Neither copy is lost whichever is chosen.
+    private func askAboutConflict(_ document: Document, other: String) {
+        let alert = NSAlert()
+        alert.messageText = "\u{201C}\(document.title)\u{201D} also changed somewhere else"
+        alert.informativeText = "Another device or app saved a different version of this file while you were editing it. The version you don\u{2019}t choose stays in File > Revert To."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Keep This Version")
+        alert.addButton(withTitle: "Use Other Version")
+        if alert.runModal() == .alertSecondButtonReturn {
+            document.useOtherVersion(other)
+        } else {
+            document.autosaveNow()
+        }
+    }
+
+    /// A file or folder was renamed: open documents at or below it follow.
+    func filesMoved(from old: URL, to new: URL) {
+        let oldPath = Document.stablePath(old)
+        for document in documents {
+            guard let path = document.fileURL.map(Document.stablePath) else { continue }
+            if path == oldPath {
+                document.fileMoved(to: new)
+            } else if path.hasPrefix(oldPath + "/") {
+                document.fileMoved(to: new.appending(path: String(path.dropFirst(oldPath.count + 1))))
+            }
+        }
     }
 
     // MARK: - Recent files

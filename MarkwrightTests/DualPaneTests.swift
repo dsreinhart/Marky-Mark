@@ -75,17 +75,15 @@ struct SourceMapTests {
         #expect(map.renderedMatch(forRaw: second, needle: "word", options: [], raw: raw, rendered: rendered) == expected)
     }
 
-    /// Occurrences are counted through the source, including any hidden inside a link address,
-    /// so a match after one lands on the next visible occurrence in the formatted pane.
+    /// A word hidden inside a link address doesn't count as an occurrence in the formatted pane.
     @Test func hiddenOccurrenceDoesNotShiftTheMatch() {
         let raw: NSString = "A [link](https://word.example) then word and word"
         let rendered: NSString = "A link then word and word"
         let map = SourceMap(entries: [.init(raw: NSRange(location: 0, length: raw.length), rendered: NSRange(location: 0, length: rendered.length))])
         let firstVisibleInRaw = raw.range(of: "word", range: NSRange(location: 30, length: raw.length - 30))
-        let firstVisible = rendered.range(of: "word")
-        withKnownIssue("Flashes the following occurrence in the formatted pane") {
-            #expect(map.renderedMatch(forRaw: firstVisibleInRaw, needle: "word", options: [], raw: raw, rendered: rendered) == firstVisible)
-        }
+        let lastInRaw = raw.range(of: "word", options: .backwards)
+        #expect(map.renderedMatch(forRaw: firstVisibleInRaw, needle: "word", options: [], raw: raw, rendered: rendered) == rendered.range(of: "word"))
+        #expect(map.renderedMatch(forRaw: lastInRaw, needle: "word", options: [], raw: raw, rendered: rendered) == rendered.range(of: "word", options: .backwards))
     }
 
     @Test func emptyMapIsSafe() {

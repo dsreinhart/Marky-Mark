@@ -176,6 +176,14 @@ struct ContentView: View {
             .frame(width: 270)
     }
 
+    /// Changes from another device can arrive while the app stays in front.
+    private func watchForExternalChanges() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(5))
+            if NSApp.isActive { document.checkForExternalChange() }
+        }
+    }
+
     /// Carries out a search jump once the editor exists.
     private func performPendingJump() async {
         guard let request = document.pendingJump else { return }
@@ -262,6 +270,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
             document.autosaveNow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            document.checkForExternalChange()
+        }
+        .task(id: document.id) { await watchForExternalChanges() }
         .navigationTitle(document.windowTitle)
         .focusedSceneValue(\.richEditorController, controller)
         .focusedSceneValue(\.document, document)

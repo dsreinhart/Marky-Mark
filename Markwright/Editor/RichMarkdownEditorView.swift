@@ -214,7 +214,8 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         func receive(_ markdown: String) {
             let controller = parent.controller
             guard controller.isDual, textView?.window?.firstResponder !== textView else {
-                load(markdown)
+                reload(markdown)
+                refreshState()
                 return
             }
             guard pendingText != markdown else { return }

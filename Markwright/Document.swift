@@ -40,6 +40,12 @@ final class Document: Identifiable {
 
     @ObservationIgnored private var autosaveTask: Task<Void, Never>? = nil
     @ObservationIgnored var onFileChange: (() -> Void)? = nil
+    /// Both this copy and the file on disk changed. Called with the other text, already kept in history.
+    @ObservationIgnored var onExternalConflict: ((Document, String) -> Void)? = nil
+    /// The other text already kept and reported, so one conflict is raised once.
+    @ObservationIgnored private var reportedOtherText: String? = nil
+    /// The file's date when last read or written, to make the periodic check cheap.
+    @ObservationIgnored private var lastSeenFileDate: Date? = nil
 
     static let autosaveDelay: Duration = .seconds(1.5)
     /// Minimum spacing between automatic version snapshots.
@@ -61,7 +67,14 @@ final class Document: Identifiable {
     var title: String { fileURL?.lastPathComponent ?? "Untitled" }
 
     /// Key for per-document settings such as writing goals.
-    var goalKey: String { fileURL?.standardizedFileURL.path ?? "untitled:\(id.uuidString)" }
+    var goalKey: String { fileURL.map(Self.stablePath) ?? "untitled:\(id.uuidString)" }
+
+    /// A file's path for use as a storage key. `standardizedFileURL` only drops "/private" from a file
+    /// that exists, so on its own it gives a different answer once a file has been moved away.
+    static func stablePath(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        return path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+    }
 
     /// Keywords stored as `tags` in the document's front matter.
     var keywords: [String] { FrontMatter.keywords(in: text) }
@@ -74,6 +87,7 @@ final class Document: Identifiable {
     /// The file was renamed or moved on disk (e.g. from the library sidebar).
     func fileMoved(to url: URL) {
         let oldKey = goalKey
+        if let old = fileURL { Self.moveVersions(from: old, to: url) }
         fileURL = url
         bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         GoalStore.shared.rename(from: oldKey, to: goalKey)
@@ -90,6 +104,7 @@ final class Document: Identifiable {
         let bookmark = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         let document = Document(text: content, fileURL: url, bookmarkData: bookmark)
         document.fileFormat = format
+        document.lastSeenFileDate = Self.fileDate(of: url)
         document.snapshot(content)
         return document
     }
@@ -110,6 +125,7 @@ final class Document: Identifiable {
             }
             let document = Document(text: content, fileURL: url, bookmarkData: data)
             document.fileFormat = format
+            document.lastSeenFileDate = Self.fileDate(of: url)
             document.snapshot(content)
             return document
         } catch {
@@ -157,12 +173,29 @@ final class Document: Identifiable {
             if isStale, let fresh = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
                 self.bookmarkData = fresh
             }
+            // The bookmark follows a file renamed behind our back; its history and goal go with it.
+            if let old = fileURL, old.resolvingSymlinksInPath().path != url.resolvingSymlinksInPath().path {
+                let oldKey = goalKey
+                Self.moveVersions(from: old, to: url)
+                fileURL = url
+                GoalStore.shared.rename(from: oldKey, to: goalKey)
+                reloadVersions()
+            }
             snapshotBeforeOverwrite()
+            // Never overwrite what another device or app wrote without keeping it first.
+            var overwritten: String? = nil
+            if let onDisk = try? TextFileFormat.read(from: url).text, onDisk != lastSavedText, onDisk != text {
+                snapshot(onDisk)
+                if onDisk != reportedOtherText { overwritten = onDisk }
+            }
             try fileFormat.encode(text).write(to: url, options: .atomic)
             lastSavedText = text
             fileURL = url
             hasUnsavedChanges = false
+            reportedOtherText = nil
+            lastSeenFileDate = Self.fileDate(of: url)
             if LibraryModel.shared.contains(url) { LibraryModel.shared.scheduleRefresh() }
+            if let overwritten { onExternalConflict?(self, overwritten) }
             return true
         } catch {
             print("Save failed: \(error.localizedDescription)")
@@ -184,6 +217,65 @@ final class Document: Identifiable {
         reloadVersions()
         snapshot(text)
         onFileChange?()
+    }
+
+    // MARK: - Changes made elsewhere
+
+    enum ExternalChange: Equatable {
+        case none
+        /// The file changed and nothing was edited here, so this copy now shows the new text.
+        case reloaded
+        /// Both changed. The other text is in version history and the owner has been told.
+        case conflict
+    }
+
+    private static func fileDate(of url: URL) -> Date? {
+        try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    /// Looks for changes made to the file by another device or app, such as the iPad through iCloud Drive.
+    @discardableResult
+    func checkForExternalChange() -> ExternalChange {
+        guard let fileURL else { return .none }
+        var url = fileURL
+        var stale = false
+        if let bookmarkData,
+           let resolved = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
+            url = resolved
+        }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
+        let date = Self.fileDate(of: url)
+        guard date != lastSeenFileDate else { return .none }
+        guard let (onDisk, format) = try? TextFileFormat.read(from: url) else { return .none }
+        lastSeenFileDate = date
+        if onDisk == lastSavedText || onDisk == reportedOtherText { return .none }
+        if onDisk == text {
+            // Both sides arrived at the same text.
+            lastSavedText = onDisk
+            hasUnsavedChanges = false
+            return .none
+        }
+        if hasUnsavedChanges {
+            snapshot(onDisk)
+            reportedOtherText = onDisk
+            onExternalConflict?(self, onDisk)
+            return .conflict
+        }
+        snapshot(lastSavedText)
+        text = onDisk
+        lastSavedText = onDisk
+        fileFormat = format
+        return .reloaded
+    }
+
+    /// Resolves a conflict in favour of the other text. What was here stays in version history.
+    func useOtherVersion(_ other: String) {
+        snapshot(text)
+        text = other
+        textDidChange()
+        autosaveNow()
     }
 
     // MARK: - Untitled drafts
@@ -219,7 +311,7 @@ final class Document: Identifiable {
     // MARK: - Versions
 
     private static func versionsFolder(for url: URL) -> URL {
-        let digest = SHA256.hash(data: Data(url.standardizedFileURL.path.utf8))
+        let digest = SHA256.hash(data: Data(stablePath(url).utf8))
         let key = digest.map { String(format: "%02x", $0) }.joined().prefix(24)
         return DocumentStore.supportFolder
             .appending(path: "Versions", directoryHint: .isDirectory)
@@ -228,6 +320,19 @@ final class Document: Identifiable {
 
     private var versionsFolder: URL? {
         fileURL.map { Self.versionsFolder(for: $0) }
+    }
+
+    /// Versions are stored by the file's path, so they have to move when the file does.
+    static func moveVersions(from old: URL, to new: URL) {
+        let source = versionsFolder(for: old)
+        let target = versionsFolder(for: new)
+        let fm = FileManager.default
+        guard source != target, let items = try? fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return }
+        try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+        for item in items {
+            try? fm.moveItem(at: item, to: target.appending(path: item.lastPathComponent))
+        }
+        try? fm.removeItem(at: source)
     }
 
     private func reloadVersions() {
@@ -262,7 +367,9 @@ final class Document: Identifiable {
         if let latest = versions.first, (try? String(contentsOf: latest.url, encoding: .utf8)) == content { return }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let millis = Int(Date().timeIntervalSince1970 * 1000)
+            // Named by the millisecond; two in the same one must not overwrite each other.
+            var millis = Int(Date().timeIntervalSince1970 * 1000)
+            while FileManager.default.fileExists(atPath: folder.appending(path: "\(millis).md").path) { millis += 1 }
             try content.write(to: folder.appending(path: "\(millis).md"), atomically: true, encoding: .utf8)
         } catch {
             print("Could not write version: \(error.localizedDescription)")

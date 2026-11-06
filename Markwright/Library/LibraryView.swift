@@ -47,9 +47,8 @@ struct LibraryView: View {
         .alert("Rename", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
             TextField("Name", text: $renameText)
             Button("Rename") {
-                if let node = renameTarget, let newURL = library.rename(node, to: renameText),
-                   let document = DocumentStore.shared.document(for: node.url) {
-                    document.fileMoved(to: newURL)
+                if let node = renameTarget, let newURL = library.rename(node, to: renameText) {
+                    DocumentStore.shared.filesMoved(from: node.url, to: newURL)
                 }
                 renameTarget = nil
             }
