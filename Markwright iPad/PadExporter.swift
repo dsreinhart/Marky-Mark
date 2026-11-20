@@ -18,7 +18,9 @@ enum PadExporter {
     }
 
     static func html(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil) -> String {
-        HTMLExporter.document(markdown: markdown, title: title, style: style, documentURL: documentURL)
+        // Images beside the document can only be read with access to its folder.
+        if let folder = documentURL?.deletingLastPathComponent() { PadFolderAccess.begin(folder) }
+        return HTMLExporter.document(markdown: markdown, title: title, style: style, documentURL: documentURL)
     }
 
     private static func exportURL(title: String, ext: String) throws -> URL {
@@ -48,34 +50,29 @@ enum PadExporter {
         return url
     }
 
-    static func pdfFile(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil) throws -> URL {
-        let formatter = UIMarkupTextPrintFormatter(markupText: html(markdown: markdown, title: title, style: style, documentURL: documentURL))
-        let renderer = UIPrintPageRenderer()
-        renderer.addPrintFormatter(formatter, startingAtPageAt: 0)
-        let page = CGRect(x: 0, y: 0, width: 612, height: 792)   // US Letter in points
-        renderer.setValue(page, forKey: "paperRect")
-        renderer.setValue(page.insetBy(dx: 54, dy: 54), forKey: "printableRect")
-
-        let data = NSMutableData()
-        UIGraphicsBeginPDFContextToData(data, page, [kCGPDFContextTitle as String: title])
-        for index in 0..<max(renderer.numberOfPages, 1) {
-            UIGraphicsBeginPDFPage()
-            renderer.drawPage(at: index, in: UIGraphicsGetPDFContextBounds())
-        }
-        UIGraphicsEndPDFContext()
-
+    static func pdfFile(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil) async throws -> URL {
+        let data = try await pdfData(markdown: markdown, title: title, style: style, documentURL: documentURL)
         let url = try exportURL(title: title, ext: "pdf")
-        try (data as Data).write(to: url)
+        try data.write(to: url)
         return url
     }
 
-    static func print(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil, from view: UIView?) {
+    /// Paginated US Letter PDF. Drawn from a web view only after the page and every image in it
+    /// have loaded; drawing straight from the HTML left images out, or the whole page blank.
+    static func pdfData(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil) async throws -> Data {
+        try await PadPDFRenderer().render(html: html(markdown: markdown, title: title, style: style, documentURL: documentURL),
+                                          title: title)
+    }
+
+    /// Prints the same pages the PDF export makes.
+    static func print(markdown: String, title: String, style: ExportStyle, documentURL: URL? = nil, from view: UIView?) async throws {
+        let data = try await pdfData(markdown: markdown, title: title, style: style, documentURL: documentURL)
         let controller = UIPrintInteractionController.shared
         let info = UIPrintInfo(dictionary: nil)
         info.jobName = title
         info.outputType = .general
         controller.printInfo = info
-        controller.printFormatter = UIMarkupTextPrintFormatter(markupText: html(markdown: markdown, title: title, style: style, documentURL: documentURL))
+        controller.printingItem = data
         if let view {
             controller.present(from: CGRect(x: view.bounds.midX, y: 0, width: 1, height: 1), in: view, animated: true)
         } else {
@@ -88,6 +85,67 @@ enum PadExporter {
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first { $0.isKeyWindow }?.rootViewController?.view
+    }
+}
+
+/// Lays HTML out in an off-screen web view, waits for it and its images to load, then draws
+/// it page by page into a PDF.
+@MainActor
+final class PadPDFRenderer: NSObject, WKNavigationDelegate {
+    private static let page = CGRect(x: 0, y: 0, width: 612, height: 792)   // US Letter in points
+    private static let margin: CGFloat = 54
+    private var loaded: CheckedContinuation<Void, Error>?
+
+    func render(html: String, title: String) async throws -> Data {
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: Self.page.width - 2 * Self.margin, height: Self.page.height))
+        webView.navigationDelegate = self
+        // Printing a web view that isn't in a window can come out blank, so park it off screen.
+        let host = PadExporter.keyWindowView?.window
+        webView.frame.origin = CGPoint(x: -10_000, y: 0)
+        host?.addSubview(webView)
+        defer { webView.removeFromSuperview() }
+
+        try await withCheckedThrowingContinuation { continuation in
+            loaded = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+        // Wait for every image to finish loading and decoding (a broken one doesn't block).
+        _ = try? await webView.callAsyncJavaScript("""
+            await Promise.all(Array.from(document.images).map(img =>
+                img.complete ? img.decode().catch(() => {}) :
+                new Promise(done => { img.onload = img.onerror = done })));
+            return true;
+            """, contentWorld: .page)
+
+        let renderer = UIPrintPageRenderer()
+        renderer.addPrintFormatter(webView.viewPrintFormatter(), startingAtPageAt: 0)
+        renderer.setValue(Self.page, forKey: "paperRect")
+        renderer.setValue(Self.page.insetBy(dx: Self.margin, dy: Self.margin), forKey: "printableRect")
+        renderer.prepare(forDrawingPages: NSRange(location: 0, length: renderer.numberOfPages))
+
+        let data = NSMutableData()
+        UIGraphicsBeginPDFContextToData(data, Self.page, [kCGPDFContextTitle as String: title])
+        for index in 0..<max(renderer.numberOfPages, 1) {
+            UIGraphicsBeginPDFPage()
+            renderer.drawPage(at: index, in: UIGraphicsGetPDFContextBounds())
+        }
+        UIGraphicsEndPDFContext()
+        return data as Data
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        loaded?.resume()
+        loaded = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        loaded?.resume(throwing: error)
+        loaded = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        loaded?.resume(throwing: error)
+        loaded = nil
     }
 }
 
@@ -159,10 +217,15 @@ struct PadExportPreviewView: View {
                         .onChange(of: style) { _, value in PadExporter.defaultStyle = value }
                         Menu {
                             Button("Share HTML…") { share { try PadExporter.htmlFile(markdown: markdown, title: title, style: style, documentURL: documentURL) } }
-                            Button("Share PDF…") { share { try PadExporter.pdfFile(markdown: markdown, title: title, style: style) } }
-                            Button("Share RTF…") { share { try PadExporter.rtfFile(markdown: markdown, title: title, style: style) } }
+                            Button("Share PDF…") { shareLater { try await PadExporter.pdfFile(markdown: markdown, title: title, style: style, documentURL: documentURL) } }
+                            Button("Share RTF…") { share { try PadExporter.rtfFile(markdown: markdown, title: title, style: style, documentURL: documentURL) } }
                             Divider()
-                            Button("Print…") { PadExporter.print(markdown: markdown, title: title, style: style, from: PadExporter.keyWindowView) }
+                            Button("Print…") {
+                                Task {
+                                    do { try await PadExporter.print(markdown: markdown, title: title, style: style, documentURL: documentURL, from: PadExporter.keyWindowView) }
+                                    catch { errorMessage = error.localizedDescription }
+                                }
+                            }
                         } label: {
                             Label("Export", systemImage: "square.and.arrow.up")
                         }
@@ -179,5 +242,11 @@ struct PadExportPreviewView: View {
 
     private func share(_ make: () throws -> URL) {
         do { shareFile = ShareFile(url: try make()) } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func shareLater(_ make: @escaping () async throws -> URL) {
+        Task {
+            do { shareFile = ShareFile(url: try await make()) } catch { errorMessage = error.localizedDescription }
+        }
     }
 }

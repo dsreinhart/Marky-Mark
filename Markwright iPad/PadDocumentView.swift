@@ -21,6 +21,8 @@ struct PadDocumentView: View {
     @State private var controller = PadEditorController()
     @AppStorage("pad.layout") private var layoutRaw = Layout.split.rawValue
     @AppStorage("view.typewriter") private var typewriter = false
+    @AppStorage("view.focusMode") private var focusRaw = FocusMode.off.rawValue
+    @State private var scrollSync = PadScrollSync()
     @AppStorage("view.showDashboard") private var showDashboard = false
     @State private var showSettings = false
     @State private var showCheatSheet = false
@@ -28,12 +30,15 @@ struct PadDocumentView: View {
     @State private var showExportPreview = false
     @State private var shareFile: ShareFile? = nil
     @State private var errorMessage: String? = nil
+    @State private var errorTitle = "Export Failed"
     @State private var showPhotoPicker = false
     @State private var photoItem: PhotosPickerItem? = nil
     @State private var showFilePicker = false
     @State private var pendingImage: PadImageStore.Prepared? = nil
     @State private var showFolderAccessPrompt = false
     @State private var showFolderPicker = false
+    /// Name of a folder just allowed that doesn't hold this document.
+    @State private var wrongFolder: String? = nil
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var linkedSheet: LinkedSheet? = nil
     @Environment(\.dismiss) private var dismissDocument
@@ -52,6 +57,8 @@ struct PadDocumentView: View {
     private var effectiveLayout: Layout {
         sizeClass == .compact && layout == .split ? .editor : layout
     }
+
+    private var focusMode: FocusMode { FocusMode(rawValue: focusRaw) ?? .off }
 
     private var title: String {
         fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
@@ -77,7 +84,8 @@ struct PadDocumentView: View {
                     Divider()
                 }
                 if effectiveLayout != .editor {
-                    MarkdownPreview(markdown: document.text, baseURL: fileURL) { index in
+                    MarkdownPreview(markdown: document.text, baseURL: fileURL,
+                                    scrollLink: effectiveLayout == .split ? scrollSync.link : nil) { index in
                         controller.toggleTask(index)
                     }
                 }
@@ -85,6 +93,7 @@ struct PadDocumentView: View {
             Divider()
             statusBar
         }
+        .onChange(of: effectiveLayout, initial: true) { _, layout in scrollSync.isEnabled = layout == .split }
         .inspector(isPresented: $showDashboard) {
             DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
                           onJumpToHeading: { controller.jumpToHeading($0) },
@@ -93,6 +102,15 @@ struct PadDocumentView: View {
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
         }
         .toolbar { toolbarContent }
+        .onChange(of: fileURL, initial: true) { _, url in
+            guard let url else { return }
+            // Images beside the document need its folder's saved grant after a relaunch.
+            PadFolderAccess.begin(url.deletingLastPathComponent())
+            // After a rename (here or in Files), bring its pictures into "<New name>-images".
+            if let moved = PadImageStore.adoptPictures(text: document.text, documentURL: url) {
+                document.text = moved
+            }
+        }
         .environment(\.openURL, OpenURLAction { url in
             guard let target = WikiLink.target(from: url) else { return .systemAction }
             Task { await openWikiLink(target) }
@@ -124,24 +142,35 @@ struct PadDocumentView: View {
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.image]) { result in
             switch result {
             case .success(let url): insertPickedFile(url)
-            case .failure(let error): errorMessage = error.localizedDescription
+            case .failure(let error): showError("Image Not Added", error.localizedDescription)
             }
         }
-        .alert("Save the image next to this document?", isPresented: $showFolderAccessPrompt) {
-            Button("Choose Folder…") { showFolderPicker = true }
-            Button("Embed in Text Instead") { finishPendingImage(allowEmbed: true) }
+        .alert("Allow Access to \(documentFolderName)?", isPresented: $showFolderAccessPrompt) {
+            Button("Allow Access\u{2026}") { showFolderPicker = true }
+            Button("Embed in Text Instead") { embedPendingImage() }
             Button("Cancel", role: .cancel) { pendingImage = nil }
         } message: {
-            Text("Markwright can only write inside folders you've opened. Open this document's folder once and images will be saved beside it as files. Otherwise the image is embedded in the Markdown.")
+            Text("iPadOS lets Markwright save images beside a document only after you allow its folder once. In the window that opens, check that it shows \(documentFolderName), then tap Open. Folders inside it are covered too.")
+        }
+        .alert("Allow \(documentFolderName) Instead?", isPresented: Binding(get: { wrongFolder != nil }, set: { if !$0 { wrongFolder = nil } })) {
+            Button("Allow Access\u{2026}") {
+                wrongFolder = nil
+                showFolderPicker = true
+            }
+            Button("Cancel", role: .cancel) {
+                wrongFolder = nil
+                pendingImage = nil
+            }
+        } message: {
+            Text("The folder allowed was \u{201C}\(wrongFolder ?? "")\u{201D}, but this document is in \(documentFolderName). Allow \(documentFolderName), or a folder that contains it, and the image will be saved there.")
         }
         .sheet(isPresented: $showFolderPicker) {
             FolderPicker(startingAt: fileURL?.deletingLastPathComponent()) { folder in
                 showFolderPicker = false
-                if let folder { PadFolderAccess.grant(folder) }
-                finishPendingImage(allowEmbed: folder == nil)
+                finishPendingImage(pickedFolder: folder)
             }
         }
-        .alert("Export failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+        .alert(errorTitle, isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
@@ -158,7 +187,9 @@ struct PadDocumentView: View {
             background: theme.useCustomEditorColors ? UIColor(theme.editorBackground) : nil,
             maxWidth: CGFloat(theme.editorMaxWidth),
             typewriter: typewriter,
-            controller: controller
+            focus: focusMode,
+            controller: controller,
+            scrollSync: scrollSync
         )
     }
 
@@ -182,13 +213,20 @@ struct PadDocumentView: View {
 
             Menu {
                 Toggle("Typewriter Scrolling", isOn: $typewriter)
+                Picker("Focus", systemImage: "scope", selection: $focusRaw) {
+                    ForEach(FocusMode.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.menu)
                 Divider()
                 Button("Export Preview…", systemImage: "doc.text.magnifyingglass") { showExportPreview = true }
                 Button("Share HTML…", systemImage: "square.and.arrow.up") { share { try PadExporter.htmlFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
-                Button("Share PDF…", systemImage: "square.and.arrow.up") { share { try PadExporter.pdfFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
+                Button("Share PDF…", systemImage: "square.and.arrow.up") { shareLater { try await PadExporter.pdfFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
                 Button("Share RTF…", systemImage: "square.and.arrow.up") { share { try PadExporter.rtfFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
                 Button("Print…", systemImage: "printer") {
-                    PadExporter.print(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL, from: PadExporter.keyWindowView)
+                    Task {
+                        do { try await PadExporter.print(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL, from: PadExporter.keyWindowView) }
+                        catch { showError("Print Failed", error.localizedDescription) }
+                    }
                 }
                 Divider()
                 Button("Recent Files…", systemImage: "clock") { dismissDocument() }
@@ -207,6 +245,9 @@ struct PadDocumentView: View {
         return HStack(spacing: 10) {
             if typewriter {
                 Text("Typewriter").foregroundStyle(.tertiary)
+            }
+            if focusMode != .off {
+                Text("Focus: \(focusMode.label)").foregroundStyle(.tertiary)
             }
             Spacer()
             if let goal {
@@ -231,7 +272,13 @@ struct PadDocumentView: View {
     }
 
     private func share(_ make: () throws -> URL) {
-        do { shareFile = ShareFile(url: try make()) } catch { errorMessage = error.localizedDescription }
+        do { shareFile = ShareFile(url: try make()) } catch { showError("Export Failed", error.localizedDescription) }
+    }
+
+    private func shareLater(_ make: @escaping () async throws -> URL) {
+        Task {
+            do { shareFile = ShareFile(url: try await make()) } catch { showError("Export Failed", error.localizedDescription) }
+        }
     }
 
     // MARK: - Wiki links
@@ -240,7 +287,7 @@ struct PadDocumentView: View {
     /// way to open another document in this window, so it appears as a sheet with an Open in Files button.
     private func openWikiLink(_ target: String) async {
         guard let folder = fileURL?.deletingLastPathComponent() else {
-            errorMessage = "Save this document first so links can be resolved next to it."
+            showError("Link Not Opened", "Save this document first so links can be resolved next to it.")
             return
         }
         PadFolderAccess.begin(folder)
@@ -252,7 +299,7 @@ struct PadDocumentView: View {
                 try ("# " + target + "\n\n").write(to: created, atomically: true, encoding: .utf8)
                 url = created
             } catch {
-                errorMessage = "No sheet named \u{201C}\(target)\u{201D} here, and the folder isn't writable. Open the folder once via the image button's prompt, or create the sheet in Files."
+                showError("Link Not Opened", "No sheet named \u{201C}\(target)\u{201D} here, and the folder isn't writable. Open the folder once via the image button's prompt, or create the sheet in Files.")
                 return
             }
         }
@@ -266,7 +313,7 @@ struct PadDocumentView: View {
 
     private func insertPickedPhoto(_ item: PhotosPickerItem) async {
         guard let data = try? await item.loadTransferable(type: Data.self) else {
-            errorMessage = "Could not load that photo."
+            showError("Image Not Added", "Could not load that photo.")
             return
         }
         let type = item.supportedContentTypes.first
@@ -277,7 +324,7 @@ struct PadDocumentView: View {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else {
-            errorMessage = "Could not read that file."
+            showError("Image Not Added", "Could not read that file.")
             return
         }
         insertImage(data: data, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension))
@@ -285,30 +332,61 @@ struct PadDocumentView: View {
 
     private func insertImage(data: Data, name: String?, type: UTType?) {
         guard let prepared = PadImageStore.prepare(data: data, suggestedName: name, type: type) else {
-            errorMessage = "That file isn't an image."
+            showError("Image Not Added", "That file isn't an image.")
             return
         }
-        if let stored = PadImageStore.storeBeside(prepared, documentURL: fileURL) {
+        guard let fileURL else {
+            insert(PadImageStore.embed(prepared))
+            return
+        }
+        if let stored = try? PadImageStore.storeBeside(prepared, documentURL: fileURL, text: document.text) {
             insert(stored)
-        } else if fileURL != nil {
+        } else {
             pendingImage = prepared
             showFolderAccessPrompt = true
-        } else {
-            insert(PadImageStore.embed(prepared))
         }
     }
 
-    /// After the folder prompt: try the folder again, else embed if the user agreed.
-    private func finishPendingImage(allowEmbed: Bool) {
+    /// After the folder window: save into the document's folder, or explain and offer the window
+    /// again when a different folder was allowed. Cancelling adds nothing.
+    private func finishPendingImage(pickedFolder: URL?) {
+        guard let prepared = pendingImage else { return }
+        guard let picked = pickedFolder, let fileURL else {
+            pendingImage = nil
+            return
+        }
+        let folder = fileURL.deletingLastPathComponent()
+        PadDiagnostics.log("folder window returned \(picked.path) for document folder \(folder.path)")
+        if PadFolderAccess.grant(picked) == .refused {
+            pendingImage = nil
+            showError("Image Not Added", "iPadOS didn't give Markwright access to \u{201C}\(picked.lastPathComponent)\u{201D}. Try again, or embed the image instead.")
+            return
+        }
+        guard PadFolderAccess.grant(picked, covers: folder) else {
+            wrongFolder = picked.lastPathComponent   // keeps pendingImage for another try
+            return
+        }
+        pendingImage = nil
+        do {
+            insert(try PadImageStore.storeBeside(prepared, documentURL: fileURL, text: document.text))
+        } catch {
+            showError("Image Not Added", "Couldn't save it in \(documentFolderName): \(error.localizedDescription)")
+        }
+    }
+
+    private var documentFolderName: String {
+        "\u{201C}\(fileURL?.deletingLastPathComponent().lastPathComponent ?? "this folder")\u{201D}"
+    }
+
+    private func embedPendingImage() {
         guard let prepared = pendingImage else { return }
         pendingImage = nil
-        if let stored = PadImageStore.storeBeside(prepared, documentURL: fileURL) {
-            insert(stored)
-        } else if allowEmbed {
-            insert(PadImageStore.embed(prepared))
-        } else {
-            errorMessage = "Couldn't write to that folder. The image was not added."
-        }
+        insert(PadImageStore.embed(prepared))
+    }
+
+    private func showError(_ title: String, _ message: String) {
+        errorTitle = title
+        errorMessage = message
     }
 
     private func insert(_ stored: PadImageStore.Stored) {
@@ -326,7 +404,7 @@ struct PadHelpView: View {
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return "The guide is missing from this copy of Markwright."
         }
-        return text
+        return HelpGuide.adaptedForPad(text)
     }
 
     var body: some View {

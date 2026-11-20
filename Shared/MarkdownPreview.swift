@@ -13,12 +13,249 @@ struct MarkdownPreview: View {
     var baseURL: URL? = nil
     /// Called with the index of a task item whose checkbox was tapped.
     var onToggleTask: ((Int) -> Void)? = nil
+    /// Set when another view keeps its scroll position in step with this one.
+    var scrollLink: PreviewScrollLink? = nil
+    @State private var position = ScrollPosition(edge: .top)
+    /// Block briefly tinted after a footnote jump, so the landing place is clear even when
+    /// it was already on screen.
+    @State private var highlighted: Int? = nil
+    @State private var flashCount = 0
+    @Environment(\.openURL) private var outerOpenURL
     private var theme = ThemeSettings.shared
 
-    init(markdown: String, baseURL: URL? = nil, onToggleTask: ((Int) -> Void)? = nil) {
+    init(markdown: String, baseURL: URL? = nil, scrollLink: PreviewScrollLink? = nil,
+         onToggleTask: ((Int) -> Void)? = nil) {
+        self.markdown = markdown
+        self.baseURL = baseURL
+        self.scrollLink = scrollLink
+        self.onToggleTask = onToggleTask
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                PreviewContent(markdown: markdown, baseURL: baseURL, onToggleTask: onToggleTask, scrollLink: scrollLink,
+                               highlighted: highlighted)
+                    .equatable()
+            }
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, geometry in
+                scrollLink?.geometryChanged(geometry)
+            }
+            .onScrollPhaseChange { _, phase in
+                scrollLink?.phaseChanged(phase)
+            }
+            .onAppear {
+                scrollLink?.scrollPreview = { y in position.scrollTo(y: y) }
+            }
+            .environment(\.openURL, OpenURLAction { url in
+                guard let jump = FootnoteJump(url: url) else {
+                    outerOpenURL(url)
+                    return .handled
+                }
+                if let target = jump.targetBlock(in: markdown) {
+                    // Below the top, so the block clears the floating toolbar.
+                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(target, anchor: UnitPoint(x: 0.5, y: 0.2)) }
+                    scrollLink?.previewJumped()
+                    flash(target)
+                }
+                return .handled
+            })
+        }
+        .background(theme.useCustomEditorColors ? theme.editorBackground : Color(platform: .mmBackground))
+    }
+
+    private func flash(_ block: Int) {
+        flashCount += 1
+        let count = flashCount
+        highlighted = block
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard count == flashCount else { return }
+            withAnimation(.easeOut(duration: 0.6)) { highlighted = nil }
+        }
+    }
+}
+
+/// A tap on a footnote number: `ref` goes to the definition, `def` back to the first reference.
+struct FootnoteJump: Equatable {
+    static let scheme = "markwright-footnote"
+
+    enum Direction: String { case toDefinition = "def", toReference = "ref" }
+    let direction: Direction
+    let id: String
+
+    init(direction: Direction, id: String) {
+        self.direction = direction
+        self.id = id
+    }
+
+    init?(url: URL) {
+        guard url.scheme == Self.scheme, let host = url.host(), let direction = Direction(rawValue: host) else { return nil }
+        let id = String(url.path(percentEncoded: false).dropFirst())
+        guard !id.isEmpty else { return nil }
+        self.init(direction: direction, id: id)
+    }
+
+    var url: URL? {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "\(Self.scheme)://\(direction.rawValue)/\(encoded)")
+    }
+
+    /// Index of the block to scroll to, in `MarkdownParser.parse` order.
+    func targetBlock(in markdown: String) -> Int? {
+        let parsed = MarkdownParser.parseWithLines(markdown)
+        switch direction {
+        case .toDefinition:
+            return parsed.firstIndex { block, _ in
+                if case .footnoteDefinition(let defID, _) = block { return defID == id }
+                return false
+            }
+        case .toReference:
+            let lines = markdown.components(separatedBy: "\n")
+            let token = "[^" + id + "]"
+            return parsed.indices.first { index in
+                let (block, span) = parsed[index]
+                if case .footnoteDefinition = block { return false }
+                if case .codeBlock = block { return false }
+                return lines[span.clamped(to: 0..<lines.count)].contains { line in
+                    var rest = line[...]
+                    while let found = rest.range(of: token) {
+                        if !rest[found.upperBound...].hasPrefix(":") { return true }
+                        rest = rest[found.upperBound...]
+                    }
+                    return false
+                }
+            }
+        }
+    }
+}
+
+/// Lets another scroll view follow the preview and lead it. The preview fills in where each
+/// block sits and how far it is scrolled; the other side maps that to its own blocks.
+@MainActor
+final class PreviewScrollLink {
+    /// Source lines of each block, in block order.
+    fileprivate(set) var blockLines: [Range<Int>] = []
+    /// Frame of each block in the preview's content coordinates.
+    private var frames: [Int: CGRect] = [:]
+    private var geometry: ScrollGeometry? = nil
+    /// True while the person is scrolling the preview.
+    var previewIsDriving = false
+    fileprivate var scrollPreview: ((CGFloat) -> Void)? = nil
+    private var layoutChangeScheduled = false
+
+    /// The person scrolled the preview.
+    var onPreviewScroll: (() -> Void)? = nil
+    /// Blocks moved (the text changed or the width did).
+    var onLayoutChange: (() -> Void)? = nil
+
+    nonisolated init() {}
+
+    fileprivate func setBlockLines(_ lines: [Range<Int>]) {
+        if lines != blockLines {
+            blockLines = lines
+            frames = frames.filter { $0.key < lines.count }
+        }
+    }
+
+    fileprivate func setFrame(_ frame: CGRect, for index: Int) {
+        frames[index] = frame
+        guard !layoutChangeScheduled else { return }
+        layoutChangeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            layoutChangeScheduled = false
+            onLayoutChange?()
+        }
+    }
+
+    fileprivate func geometryChanged(_ geometry: ScrollGeometry) {
+        self.geometry = geometry
+        if previewIsDriving { onPreviewScroll?() }
+    }
+
+    fileprivate func phaseChanged(_ phase: ScrollPhase) {
+        switch phase {
+        case .tracking, .interacting, .decelerating: previewIsDriving = true
+        default: previewIsDriving = false
+        }
+    }
+
+    /// After a footnote jump the other side catches up once the scroll has settled.
+    fileprivate func previewJumped() {
+        for delay in [0.05, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.onPreviewScroll?() }
+        }
+    }
+
+    // MARK: Reading the preview
+
+    /// Content y at the top of the visible area, and the largest it can be.
+    var visibleTop: CGFloat { geometry.map { $0.contentOffset.y + $0.contentInsets.top } ?? 0 }
+    var maxVisibleTop: CGFloat {
+        guard let geometry else { return 0 }
+        return max(geometry.contentSize.height + geometry.contentInsets.bottom - geometry.containerSize.height + geometry.contentInsets.top, 0)
+    }
+    var viewportHeight: CGFloat { geometry?.containerSize.height ?? 0 }
+
+    func frame(ofBlock index: Int) -> CGRect? { frames[index] }
+
+    /// The block at content y in the preview and how far into it y falls (0…1).
+    /// Block -1 means the margin above the first block.
+    func block(atY y: CGFloat) -> (index: Int, fraction: CGFloat)? {
+        guard !blockLines.isEmpty, let first = frames[0] else { return nil }
+        if y < first.minY { return (-1, first.minY > 0 ? max(y, 0) / first.minY : 0) }
+        var low = 0, high = blockLines.count - 1
+        while low < high {   // last block whose top is at or above y
+            let mid = (low + high + 1) / 2
+            if let frame = frames[mid], frame.minY <= y { low = mid } else { high = mid - 1 }
+        }
+        guard let frame = frames[low] else { return nil }
+        let fraction = frame.height > 0 ? min(max((y - frame.minY) / frame.height, 0), 1) : 0
+        return (low, fraction)
+    }
+
+    /// Content y in the preview for a place in a block (see `block(atY:)`).
+    func y(ofBlock index: Int, fraction: CGFloat) -> CGFloat? {
+        if index < 0 { return frames[0].map { $0.minY * fraction } }
+        guard let frame = frames[index] else { return nil }
+        return frame.minY + frame.height * fraction
+    }
+
+    /// Scrolls the preview so content y sits at the top, without it counting as the person scrolling.
+    func scrollPreview(toY y: CGFloat) {
+        let target = min(max(y, 0), maxVisibleTop) - (geometry?.contentInsets.top ?? 0)
+        if abs(target - (geometry?.contentOffset.y ?? 0)) < 0.5 { return }
+        scrollPreview?(target)
+    }
+}
+
+/// The blocks, separated out so scrolling (which changes the parent's state) doesn't re-parse.
+private struct PreviewContent: View, Equatable {
+    let markdown: String
+    let baseURL: URL?
+    let onToggleTask: ((Int) -> Void)?
+    let scrollLink: PreviewScrollLink?
+    /// Whether task checkboxes respond, compared in place of the closure.
+    private let tasksEnabled: Bool
+    private var theme = ThemeSettings.shared
+    private static let space = "markwright.preview.content"
+
+    let highlighted: Int?
+
+    init(markdown: String, baseURL: URL?, onToggleTask: ((Int) -> Void)?, scrollLink: PreviewScrollLink?,
+         highlighted: Int?) {
         self.markdown = markdown
         self.baseURL = baseURL
         self.onToggleTask = onToggleTask
+        self.scrollLink = scrollLink
+        self.highlighted = highlighted
+        tasksEnabled = onToggleTask != nil
+    }
+
+    nonisolated static func == (a: PreviewContent, b: PreviewContent) -> Bool {
+        a.markdown == b.markdown && a.baseURL == b.baseURL && a.scrollLink === b.scrollLink
+            && a.tasksEnabled == b.tasksEnabled && a.highlighted == b.highlighted
     }
 
     private struct Item: Identifiable {
@@ -27,31 +264,49 @@ struct MarkdownPreview: View {
         let taskIndex: Int?
     }
 
-    private var items: [Item] {
+    private func makeItems() -> [Item] {
+        let parsed = MarkdownParser.parseWithLines(markdown)
+        scrollLink?.setBlockLines(parsed.map(\.lines))
         var result: [Item] = []
         var tasks = 0
-        for (index, block) in MarkdownParser.parse(markdown).enumerated() {
+        for (index, entry) in parsed.enumerated() {
             var taskIndex: Int? = nil
-            if case .taskListItem = block { taskIndex = tasks; tasks += 1 }
-            result.append(Item(id: index, block: block, taskIndex: taskIndex))
+            if case .taskListItem = entry.block { taskIndex = tasks; tasks += 1 }
+            result.append(Item(id: index, block: entry.block, taskIndex: taskIndex))
         }
         return result
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(items) { item in
-                    blockView(item)
-                }
-                Spacer(minLength: 60)
+        let items = makeItems()
+        Group {
+            if scrollLink != nil {
+                // Every block is laid out so the linked view can map positions exactly.
+                VStack(alignment: .leading, spacing: 6) { rows(items) }
+            } else {
+                LazyVStack(alignment: .leading, spacing: 6) { rows(items) }
             }
-            .padding(24)
-            .frame(maxWidth: theme.editorMaxWidth > 0 ? CGFloat(theme.editorMaxWidth) + 48 : .infinity, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
-        .background(theme.useCustomEditorColors ? theme.editorBackground : Color(platform: .mmBackground))
+        .padding(24)
+        .frame(maxWidth: theme.editorMaxWidth > 0 ? CGFloat(theme.editorMaxWidth) + 48 : .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .coordinateSpace(.named(Self.space))
         .foregroundStyle(textColor)
+    }
+
+    @ViewBuilder
+    private func rows(_ items: [Item]) -> some View {
+        ForEach(items) { item in
+            blockView(item)
+                .background {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.linkColor.opacity(item.id == highlighted ? 0.14 : 0))
+                        .padding(-6)
+                }
+                .id(item.id)
+                .modifier(FrameReporter(link: scrollLink, index: item.id, space: Self.space))
+        }
+        Spacer(minLength: 60)
     }
 
     // MARK: - Fonts & colors
@@ -152,8 +407,9 @@ struct MarkdownPreview: View {
             .padding(.vertical, 2)
         case .footnoteDefinition(let id, let text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(id).font(font(size: bodySize * 0.75)).foregroundStyle(theme.linkColor)
-                Text(inline(text, base: font(size: bodySize * 0.9))).foregroundStyle(.secondary).textSelection(.enabled)
+                footnoteLabel(id)
+                Text(inline(text, base: font(size: bodySize * 0.9)) + footnoteBack(id))
+                    .foregroundStyle(.secondary).textSelection(.enabled)
             }
             .padding(.leading, 8)
         case .frontMatter, .blank:
@@ -235,6 +491,29 @@ struct MarkdownPreview: View {
 
     // MARK: - Inline
 
+    /// The number at the start of a definition, linking back to where it's used. Its tap area
+    /// reaches past the small number so a finger doesn't have to land exactly on it.
+    @ViewBuilder
+    private func footnoteLabel(_ id: String) -> some View {
+        let label = Text(id).font(font(size: bodySize * 0.75)).foregroundStyle(theme.linkColor)
+        if let back = FootnoteJump(direction: .toReference, id: id).url {
+            Link(destination: back) { label }
+                .padding(10).contentShape(Rectangle()).padding(-10)
+                .accessibilityLabel("Footnote \(id), back to text")
+        } else {
+            label
+        }
+    }
+
+    /// The arrow at the end of a definition, also linking back to where it's used.
+    private func footnoteBack(_ id: String) -> AttributedString {
+        var arrow = AttributedString(" \u{21A9}\u{FE0E}")   // text style, not the emoji
+        arrow.font = font(size: bodySize * 0.9)
+        arrow.foregroundColor = theme.linkColor
+        arrow.link = FootnoteJump(direction: .toReference, id: id).url
+        return arrow
+    }
+
     private func inline(_ text: String, base: Font? = nil) -> AttributedString {
         var result = AttributedString()
         append(InlineParser.parse(text), to: &result, base: base ?? bodyFont, bold: false, italic: false, strike: false, link: nil)
@@ -298,8 +577,26 @@ struct MarkdownPreview: View {
                 piece.font = font(size: bodySize * 0.7)
                 piece.baselineOffset = bodySize * 0.4
                 piece.foregroundColor = theme.linkColor
+                piece.link = FootnoteJump(direction: .toDefinition, id: id).url
                 result.append(piece)
             }
+        }
+    }
+}
+
+/// Records a block's frame for the scroll link.
+private struct FrameReporter: ViewModifier {
+    let link: PreviewScrollLink?
+    let index: Int
+    let space: String
+
+    func body(content: Content) -> some View {
+        if let link {
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(space)) }) { frame in
+                link.setFrame(frame, for: index)
+            }
+        } else {
+            content
         }
     }
 }

@@ -16,7 +16,9 @@ struct PadEditorView: UIViewRepresentable {
     let background: UIColor?
     let maxWidth: CGFloat
     let typewriter: Bool
+    var focus: FocusMode = .off
     let controller: PadEditorController
+    var scrollSync: PadScrollSync? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -40,6 +42,7 @@ struct PadEditorView: UIViewRepresentable {
         apply(appearanceTo: textView)
         context.coordinator.highlight(textView)
         controller.textView = textView
+        scrollSync?.textView = textView
         controller.textDidChange = { [weak coordinator = context.coordinator, weak textView] in
             guard let coordinator, let textView else { return }
             coordinator.sync(textView)
@@ -52,13 +55,17 @@ struct PadEditorView: UIViewRepresentable {
         var needsHighlight = false
         if textView.maxWidth != maxWidth { textView.maxWidth = maxWidth; textView.setNeedsLayout() }
         if textView.typewriter != typewriter { textView.typewriter = typewriter; textView.setNeedsLayout() }
-        if context.coordinator.fontSize != fontSize || context.coordinator.textColor != textColor {
+        if context.coordinator.fontSize != fontSize || context.coordinator.textColor != textColor
+            || context.coordinator.focus != focus {
             context.coordinator.fontSize = fontSize
             context.coordinator.textColor = textColor
+            context.coordinator.focus = focus
             needsHighlight = true
         }
+        if scrollSync?.textView !== textView { scrollSync?.textView = textView }
         apply(appearanceTo: textView)
         if textView.text != text {
+            scrollSync?.textChanged()
             let selected = textView.selectedRange
             textView.text = text
             let length = (text as NSString).length
@@ -77,21 +84,45 @@ struct PadEditorView: UIViewRepresentable {
         var parent: PadEditorView
         var fontSize: CGFloat
         var textColor: UIColor
+        var focus: FocusMode
+        /// The range left undimmed at the last highlight.
+        private var focusRange: NSRange? = nil
 
         init(_ parent: PadEditorView) {
             self.parent = parent
             fontSize = parent.fontSize
             textColor = parent.textColor
+            focus = parent.focus
         }
 
         func highlight(_ textView: UITextView) {
             MarkdownHighlighter.highlight(textView.textStorage, fontSize: fontSize, baseColor: textColor)
+            applyFocus(textView)
             textView.layoutManager.invalidateGlyphs(forCharacterRange: NSRange(location: 0, length: textView.textStorage.length),
                                                     changeInLength: 0, actualCharacterRange: nil)
         }
 
+        /// Dims everything but the paragraph or sentence at the insertion point. UIKit has no
+        /// temporary attributes, so this recolors the text storage right after highlighting.
+        private func applyFocus(_ textView: UITextView) {
+            let storage = textView.textStorage
+            focusRange = FocusMode.range(in: storage.string as NSString, at: textView.selectedRange.location, mode: focus)
+            guard let focusRange else { return }
+            let dim = textColor.withAlphaComponent(0.28)
+            storage.beginEditing()
+            if focusRange.location > 0 {
+                storage.addAttribute(.foregroundColor, value: dim, range: NSRange(location: 0, length: focusRange.location))
+            }
+            let end = NSMaxRange(focusRange)
+            if end < storage.length {
+                storage.addAttribute(.foregroundColor, value: dim, range: NSRange(location: end, length: storage.length - end))
+            }
+            storage.endEditing()
+        }
+
         /// Pushes the text view's content to SwiftUI and recolors.
         func sync(_ textView: UITextView) {
+            parent.scrollSync?.textChanged()
             parent.text = textView.text
             highlight(textView)
             scrollIfTypewriter(textView)
@@ -102,7 +133,21 @@ struct PadEditorView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // Re-dim when the insertion point moves to another paragraph or sentence (not
+            // while composing marked text, which recoloring would disturb).
+            if focus != .off, textView.markedTextRange == nil,
+               FocusMode.range(in: textView.text as NSString, at: textView.selectedRange.location, mode: focus) != focusRange {
+                highlight(textView)
+            }
             scrollIfTypewriter(textView)
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            parent.scrollSync?.editorDidScroll()
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            parent.scrollSync?.editorWillBeginDragging()
         }
 
         private func scrollIfTypewriter(_ textView: UITextView) {

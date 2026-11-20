@@ -9,21 +9,6 @@
 import SwiftUI
 import AppKit
 
-enum FocusMode: String, CaseIterable, Identifiable {
-    case off
-    case paragraph
-    case sentence
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .off: return "Off"
-        case .paragraph: return "Paragraph"
-        case .sentence: return "Sentence"
-        }
-    }
-}
-
 /// App-wide view preferences (persisted) that both editors and the menus read.
 @MainActor
 @Observable
@@ -274,19 +259,7 @@ enum EditorBehaviors {
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
         guard mode != .off, storage.length > 0 else { return }
 
-        let location = min(textView.selectedRange.location, storage.length)
-        let ns = storage.string as NSString
-        var focus = ns.paragraphRange(for: NSRange(location: min(location, max(storage.length - 1, 0)), length: 0))
-        if mode == .sentence {
-            var found: NSRange? = nil
-            ns.enumerateSubstrings(in: focus, options: [.bySentences, .substringNotRequired]) { _, range, _, stop in
-                if NSLocationInRange(location, range) || location == NSMaxRange(range) {
-                    found = range
-                    stop.pointee = true
-                }
-            }
-            if let found { focus = found }
-        }
+        guard let focus = FocusMode.range(in: storage.string as NSString, at: textView.selectedRange.location, mode: mode) else { return }
         if focus.location > 0 {
             layoutManager.addTemporaryAttribute(.foregroundColor, value: dimColor,
                                                 forCharacterRange: NSRange(location: 0, length: focus.location))
