@@ -10,20 +10,6 @@
 import SwiftUI
 import AppKit
 
-struct FormatState: Equatable {
-    var bold = false
-    var italic = false
-    var strike = false
-    var code = false
-    var highlight = false
-    var hasLink = false
-    /// The section at the cursor is folded.
-    var folded = false
-    var blockKind: BlockKind = .paragraph
-    var indent = 0
-    var hasSelection = false
-}
-
 @MainActor
 @Observable
 final class RichEditorController {

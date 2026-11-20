@@ -20,6 +20,15 @@ struct FormattedEditorTests {
         #expect(editor.text == "Mark this word please.")
     }
 
+    @Test func returnAtEndOfParagraphBeforeAnotherMakesNewParagraph() {
+        let editor = FormattedEditor()
+        editor.load("First.\n\nSecond.")
+        editor.cursor(after: "First.")
+        editor.textView.insertNewline(nil)
+        editor.type("New")
+        #expect(editor.text == "First.\n\nNew\n\nSecond.")
+    }
+
     @Test func typedTagIsStyled() {
         let editor = FormattedEditor()
         editor.load("Tagging")

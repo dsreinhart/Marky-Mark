@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct PadEditorView: UIViewRepresentable {
     @Binding var text: String
@@ -18,7 +19,7 @@ struct PadEditorView: UIViewRepresentable {
     let typewriter: Bool
     var focus: FocusMode = .off
     let controller: PadEditorController
-    var scrollSync: PadScrollSync? = nil
+    var sync: PadDualSync? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -42,12 +43,20 @@ struct PadEditorView: UIViewRepresentable {
         apply(appearanceTo: textView)
         context.coordinator.highlight(textView)
         controller.textView = textView
-        scrollSync?.textView = textView
+        sync?.raw = textView
+        textView.onContentHeightChange = { [weak sync] in sync?.contentHeightChanged() }
         controller.textDidChange = { [weak coordinator = context.coordinator, weak textView] in
             guard let coordinator, let textView else { return }
             coordinator.sync(textView)
         }
         return textView
+    }
+
+    static func dismantleUIView(_ textView: PadTextView, coordinator: Coordinator) {
+        coordinator.cancelPendingText()
+        if coordinator.parent.controller.textView === textView {
+            coordinator.parent.controller.paneWillDisappear(.raw)
+        }
     }
 
     func updateUIView(_ textView: PadTextView, context: Context) {
@@ -62,15 +71,20 @@ struct PadEditorView: UIViewRepresentable {
             context.coordinator.focus = focus
             needsHighlight = true
         }
-        if scrollSync?.textView !== textView { scrollSync?.textView = textView }
+        if sync?.raw !== textView { sync?.raw = textView }
+        if controller.textView !== textView { controller.textView = textView }
         apply(appearanceTo: textView)
         if textView.text != text {
-            scrollSync?.textChanged()
-            let selected = textView.selectedRange
-            textView.text = text
-            let length = (text as NSString).length
-            textView.selectedRange = NSRange(location: min(selected.location, length), length: 0)
-            needsHighlight = true
+            // In Dual, while the cursor is in the formatted pane, wait for a pause in its typing.
+            if controller.isDual, !textView.isFirstResponder {
+                context.coordinator.receiveLater(text, in: textView)
+            } else {
+                context.coordinator.cancelPendingText()
+                context.coordinator.replaceText(text, in: textView)
+                needsHighlight = false
+            }
+        } else {
+            context.coordinator.cancelPendingText()
         }
         if needsHighlight { context.coordinator.highlight(textView) }
     }
@@ -87,6 +101,8 @@ struct PadEditorView: UIViewRepresentable {
         var focus: FocusMode
         /// The range left undimmed at the last highlight.
         private var focusRange: NSRange? = nil
+        private var pendingText: String? = nil
+        private var pendingTask: Task<Void, Never>? = nil
 
         init(_ parent: PadEditorView) {
             self.parent = parent
@@ -122,10 +138,59 @@ struct PadEditorView: UIViewRepresentable {
 
         /// Pushes the text view's content to SwiftUI and recolors.
         func sync(_ textView: UITextView) {
-            parent.scrollSync?.textChanged()
             parent.text = textView.text
             highlight(textView)
             scrollIfTypewriter(textView)
+        }
+
+        /// Text from the other pane, shown now and keeping the place in the view.
+        func replaceText(_ text: String, in textView: UITextView) {
+            let selected = textView.selectedRange
+            let offset = textView.contentOffset
+            textView.text = text
+            let length = (text as NSString).length
+            textView.selectedRange = NSRange(location: min(selected.location, length), length: 0)
+            highlight(textView)
+            textView.layoutIfNeeded()
+            textView.setContentOffset(offset, animated: false)
+            parent.sync?.resync()
+        }
+
+        /// Text from the other pane, shown after a short pause so fast typing there stays fast.
+        func receiveLater(_ text: String, in textView: UITextView) {
+            guard pendingText != text else { return }
+            pendingText = text
+            pendingTask?.cancel()
+            pendingTask = Task { [weak self, weak textView] in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled, let self, let textView else { return }
+                self.flushPendingText(in: textView)
+            }
+        }
+
+        func flushPendingText(in textView: UITextView) {
+            pendingTask?.cancel()
+            pendingTask = nil
+            guard let text = pendingText else { return }
+            pendingText = nil
+            if textView.text != text { replaceText(text, in: textView) }
+        }
+
+        func cancelPendingText() {
+            pendingTask?.cancel()
+            pendingTask = nil
+            pendingText = nil
+        }
+
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            // Text typed in the formatted pane may still be on its way here.
+            flushPendingText(in: textView)
+            if textView.text != parent.text { replaceText(parent.text, in: textView) }
+            return true
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.controller.paneDidTakeFocus(.raw)
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -143,11 +208,11 @@ struct PadEditorView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            parent.scrollSync?.editorDidScroll()
+            parent.sync?.paneDidScroll(.raw)
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            parent.scrollSync?.editorWillBeginDragging()
+            parent.sync?.paneWillBeginDragging(.raw)
         }
 
         private func scrollIfTypewriter(_ textView: UITextView) {
@@ -178,6 +243,9 @@ extension PadEditorView.Coordinator: @MainActor NSLayoutManagerDelegate {
 final class PadTextView: UITextView {
     var maxWidth: CGFloat = 0
     var typewriter = false
+    /// Called after layout when the content height changed.
+    var onContentHeightChange: (() -> Void)?
+    private var lastContentHeight: CGFloat = 0
 
     override func layoutSubviews() {
         var inset = UIEdgeInsets(top: 20, left: 20, bottom: 24, right: 20)
@@ -193,6 +261,10 @@ final class PadTextView: UITextView {
             textContainerInset = inset
         }
         super.layoutSubviews()
+        if abs(contentSize.height - lastContentHeight) > 0.5 {
+            lastContentHeight = contentSize.height
+            onContentHeightChange?()
+        }
     }
 }
 
@@ -201,8 +273,114 @@ final class PadTextView: UITextView {
 @MainActor
 @Observable
 final class PadEditorController {
+    /// The two editors: Markdown source, and the formatted view.
+    enum Pane { case raw, formatted }
+
+    /// The raw editor, while it is showing.
     @ObservationIgnored weak var textView: UITextView?
     @ObservationIgnored var textDidChange: (() -> Void)?
+    /// The formatted editor, while it is showing.
+    @ObservationIgnored weak var rich: PadRichCoordinator?
+    /// Keeps Dual's panes scrolled together.
+    @ObservationIgnored let dualSync = PadDualSync()
+    /// Opens a `[[wiki link]]` tapped in the formatted editor.
+    @ObservationIgnored var openWikiLink: ((String) -> Void)?
+    /// Saves a picture pasted into the formatted editor, as the image button does.
+    @ObservationIgnored var pasteImage: ((Data, UTType) -> Void)?
+
+    /// Which panes the layout shows (set by the document view).
+    private(set) var showsRaw = true
+    private(set) var showsFormatted = false
+    /// The pane the cursor was last in; the toolbar and dashboard act on it.
+    private(set) var activePane: Pane = .raw
+    /// The formatted editor's formatting at the cursor, for the toolbar.
+    var formatState = FormatState()
+    /// A link, wiki link or image address being asked for (formatted editor).
+    var prompt: PadLinkPrompt? = nil
+
+    var isDual: Bool { showsRaw && showsFormatted }
+
+    /// The toolbar's commands go to the formatted editor (else they insert Markdown in the raw one).
+    var formattedIsActive: Bool {
+        showsFormatted && rich != nil && (!showsRaw || activePane == .formatted)
+    }
+
+    func setPanes(raw: Bool, formatted: Bool) {
+        showsRaw = raw
+        showsFormatted = formatted
+        if !raw { activePane = .formatted } else if !formatted { activePane = .raw }
+        dualSync.isEnabled = raw && formatted
+        DispatchQueue.main.async { [weak self] in self?.restorePlace() }
+    }
+
+    func paneDidTakeFocus(_ pane: Pane) {
+        if activePane != pane { activePane = pane }
+        dualSync.setDriver(pane)
+        rich?.applyBehaviors()
+        if pane == .formatted { rich?.refreshState() }
+    }
+
+    func paneWillDisappear(_ pane: Pane) {
+        if pane == .formatted, showsRaw { activePane = .raw }
+    }
+
+    // MARK: Keeping the place across layouts
+
+    /// Where the document was (the source offset at the top of the view), carried across a layout change.
+    @ObservationIgnored private var pendingTop: Int? = nil
+
+    /// Call just before the layout changes, while the outgoing panes still show.
+    func layoutWillChange() {
+        pendingTop = currentTop()
+    }
+
+    /// The source offset at the top of the pane in use; 0 at the very top.
+    private func currentTop() -> Int? {
+        let useRaw = showsRaw && (activePane == .raw || !showsFormatted || rich == nil)
+        if useRaw, let raw = textView { return Self.topCharacter(of: raw) }
+        if let rich, let view = rich.textView {
+            let location = Self.topCharacter(of: view)
+            return rich.sourceMap.rawLocation(forRendered: location, raw: rich.lastKnownText as NSString,
+                                              rendered: view.textStorage.string as NSString)
+        }
+        return textView.map(Self.topCharacter(of:))
+    }
+
+    private static func topCharacter(of view: UITextView) -> Int {
+        let top = PadDualSync.visibleTop(view)
+        guard top > 1, view.textStorage.length > 0 else { return 0 }
+        let point = CGPoint(x: 8, y: top - view.textContainerInset.top + 1)
+        return view.layoutManager.characterIndex(for: point, in: view.textContainer,
+                                                 fractionOfDistanceBetweenInsertionPoints: nil)
+    }
+
+    /// Scrolls the pane in use back to the place recorded before the layout changed, once it's laid out.
+    private func restorePlace(attempt: Int = 0) {
+        guard let top = pendingTop else { return }
+        let useRaw = showsRaw && (activePane == .raw || !showsFormatted)
+        let view: UITextView? = useRaw ? textView : rich?.textView
+        guard let view, view.bounds.height > 0, view.textStorage.length > 0 || top == 0 else {
+            if attempt < 30 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in self?.restorePlace(attempt: attempt + 1) }
+            } else {
+                pendingTop = nil
+            }
+            return
+        }
+        pendingTop = nil
+        var location = top
+        if !useRaw, let rich {
+            location = rich.sourceMap.renderedLocation(forRaw: top, raw: rich.lastKnownText as NSString,
+                                                       rendered: view.textStorage.string as NSString)
+        }
+        if top > 0 {
+            view.layoutIfNeeded()
+            let y = min(PadDualSync.scrollY(of: location, in: view), PadDualSync.maxVisibleTop(view))
+            view.setContentOffset(CGPoint(x: view.contentOffset.x, y: y - view.adjustedContentInset.top), animated: false)
+        }
+        dualSync.setDriver(useRaw ? .raw : .formatted)
+        dualSync.resync()
+    }
 
     var hasSelection: Bool {
         (textView?.selectedRange.length ?? 0) > 0

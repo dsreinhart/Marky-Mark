@@ -3,10 +3,15 @@
 //  Markwright
 //
 //  NSAttributedString (from the rendered editor) → Markdown. Only the semantic
-//  attributes are consulted; fonts and colors are ignored.
+//  attributes are consulted; fonts and colors are ignored. Shared by the Mac
+//  and iPad formatted editors.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 enum MarkdownSerializer {
@@ -22,9 +27,11 @@ enum MarkdownSerializer {
         let ns = text.string as NSString
         var emitter = Emitter()
         var counter = OrderedCounter()
-        var table: TableAccumulator? = nil
         var spans: [(lines: Range<Int>, rendered: NSRange)] = []
+        #if os(macOS)
+        var table: TableAccumulator? = nil
         var tableRendered: NSRange? = nil
+        #endif
 
         /// Records what the emitter added since `start` as the source of `rendered`.
         func record(from start: Int, rendered: NSRange, skipFence: Bool = false) {
@@ -35,11 +42,13 @@ enum MarkdownSerializer {
             spans.append((first..<emitter.lines.count, rendered))
         }
         func flushTable() {
+            #if os(macOS)
             let start = emitter.lines.count
             table?.flush(into: &emitter)
             if let rendered = tableRendered { record(from: start, rendered: rendered) }
             table = nil
             tableRendered = nil
+            #endif
         }
 
         var location = 0
@@ -55,8 +64,19 @@ enum MarkdownSerializer {
 
             let attrs = text.attributes(at: paragraphRange.location, effectiveRange: nil)
             let block = attrs[.mmBlock] as? BlockInfo ?? .paragraph
-            let paragraphStyle = attrs[.paragraphStyle] as? NSParagraphStyle
 
+            // A table shown read-only (iPad) goes back exactly as it came.
+            if let raw = attrs[.mmRawTable] as? String {
+                flushTable()
+                _ = counter.next(for: BlockInfo(.tableCell))
+                let start = emitter.lines.count
+                emitter.emit(raw.components(separatedBy: "\n"))
+                record(from: start, rendered: content)
+                continue
+            }
+
+            #if os(macOS)
+            let paragraphStyle = attrs[.paragraphStyle] as? NSParagraphStyle
             // Table cells are grouped by their NSTextTable and flushed together.
             if let cellBlock = paragraphStyle?.textBlocks.first as? NSTextTableBlock {
                 let cellText = inlineMarkdown(text, range: content)
@@ -75,6 +95,7 @@ enum MarkdownSerializer {
                 _ = counter.next(for: BlockInfo(.tableCell))
                 continue
             }
+            #endif
             flushTable()
 
             let linesBefore = emitter.lines.count
@@ -180,6 +201,7 @@ enum MarkdownSerializer {
         }
     }
 
+    #if os(macOS)
     private struct TableAccumulator {
         let table: NSTextTable
         private var cells: [Int: [Int: String]] = [:]
@@ -209,6 +231,7 @@ enum MarkdownSerializer {
             emitter.emit(lines)
         }
     }
+    #endif
 
     private static func singleLine(_ text: String) -> String {
         text.replacingOccurrences(of: MarkdownSyntax.lineSeparatorString, with: " ")

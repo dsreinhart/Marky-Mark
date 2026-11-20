@@ -2,7 +2,8 @@
 //  PadDocumentView.swift
 //  Markwright iPad
 //
-//  One document: raw editor with formatting toolbar, live preview, dashboard.
+//  One document: the Raw (Markdown source) and Formatted editors, alone or side by side
+//  (Dual), with the formatting toolbar, the dashboard and the More menu.
 //
 
 import SwiftUI
@@ -14,6 +15,8 @@ struct PadDocumentView: View {
     @Binding var document: MarkdownFileDocument
     let fileURL: URL?
 
+    /// Raw, Dual and Formatted, as on the Mac. The stored names are the ones from before the
+    /// formatted view could be edited (Editor, Split, Preview), so a saved choice carries over.
     enum Layout: String, CaseIterable {
         case editor, split, preview
     }
@@ -22,7 +25,6 @@ struct PadDocumentView: View {
     @AppStorage("pad.layout") private var layoutRaw = Layout.split.rawValue
     @AppStorage("view.typewriter") private var typewriter = false
     @AppStorage("view.focusMode") private var focusRaw = FocusMode.off.rawValue
-    @State private var scrollSync = PadScrollSync()
     @AppStorage("view.showDashboard") private var showDashboard = false
     @State private var showSettings = false
     @State private var showCheatSheet = false
@@ -37,6 +39,9 @@ struct PadDocumentView: View {
     @State private var pendingImage: PadImageStore.Prepared? = nil
     @State private var showFolderAccessPrompt = false
     @State private var showFolderPicker = false
+    /// What's typed in the formatted editor's link prompt.
+    @State private var promptAddress = ""
+    @State private var promptLabel = ""
     /// Name of a folder just allowed that doesn't hold this document.
     @State private var wrongFolder: String? = nil
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -53,7 +58,7 @@ struct PadDocumentView: View {
         get { Layout(rawValue: layoutRaw) ?? .split }
     }
 
-    /// Split view needs room; in a compact width fall back to the editor.
+    /// Dual needs room; in a compact width fall back to Raw.
     private var effectiveLayout: Layout {
         sizeClass == .compact && layout == .split ? .editor : layout
     }
@@ -70,12 +75,10 @@ struct PadDocumentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if effectiveLayout != .preview {
-                PadFormattingToolbar(controller: controller,
-                                     onPickPhoto: { showPhotoPicker = true },
-                                     onPickFile: { showFilePicker = true })
-                Divider()
-            }
+            PadFormattingToolbar(controller: controller,
+                                 onPickPhoto: { showPhotoPicker = true },
+                                 onPickFile: { showFilePicker = true })
+            Divider()
             HStack(spacing: 0) {
                 if effectiveLayout != .preview {
                     editor
@@ -84,21 +87,24 @@ struct PadDocumentView: View {
                     Divider()
                 }
                 if effectiveLayout != .editor {
-                    MarkdownPreview(markdown: document.text, baseURL: fileURL,
-                                    scrollLink: effectiveLayout == .split ? scrollSync.link : nil) { index in
-                        controller.toggleTask(index)
-                    }
+                    formatted
                 }
             }
             Divider()
             statusBar
         }
-        .onChange(of: effectiveLayout, initial: true) { _, layout in scrollSync.isEnabled = layout == .split }
+        .onChange(of: effectiveLayout, initial: true) { _, layout in
+            controller.setPanes(raw: layout != .preview, formatted: layout != .editor)
+        }
+        .onAppear {
+            controller.openWikiLink = { target in Task { await openWikiLink(target) } }
+            controller.pasteImage = { data, type in insertImage(data: data, name: "pasted", type: type) }
+        }
         .inspector(isPresented: $showDashboard) {
             DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
-                          onJumpToHeading: { controller.jumpToHeading($0) },
+                          onJumpToHeading: { controller.goToHeading($0) },
                           onOpenWikiLink: { target in Task { await openWikiLink(target) } },
-                          onJumpToTag: { tag in controller.jump(toText: "#" + tag) })
+                          onJumpToTag: { tag in controller.goToText("#" + tag) })
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
         }
         .toolbar { toolbarContent }
@@ -170,6 +176,21 @@ struct PadDocumentView: View {
                 finishPendingImage(pickedFolder: folder)
             }
         }
+        .alert(controller.prompt?.title ?? "", isPresented: Binding(get: { controller.prompt != nil }, set: { shown in
+            if !shown { DispatchQueue.main.async { controller.prompt = nil } }
+        }), presenting: controller.prompt) { prompt in
+            promptFields(prompt)
+        } message: { prompt in
+            switch prompt.kind {
+            case .wikiLink: Text("The name of a sheet in this document's folder.")
+            case .image: Text("The address of a picture on the web.")
+            case .link: EmptyView()
+            }
+        }
+        .onChange(of: controller.prompt?.id) {
+            promptAddress = controller.prompt?.address ?? ""
+            promptLabel = ""
+        }
         .alert(errorTitle, isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
         } message: {
@@ -187,21 +208,66 @@ struct PadDocumentView: View {
             background: theme.useCustomEditorColors ? UIColor(theme.editorBackground) : nil,
             maxWidth: CGFloat(theme.editorMaxWidth),
             typewriter: typewriter,
+            // In Dual, Focus follows the cursor, which is only in one pane.
+            focus: controller.isDual && controller.activePane != .raw ? .off : focusMode,
+            controller: controller,
+            sync: controller.dualSync
+        )
+    }
+
+    private var formatted: some View {
+        PadRichEditorView(
+            text: $document.text,
+            style: EditorStyle(theme: theme),
+            baseURL: fileURL,
+            typewriter: typewriter,
             focus: focusMode,
             controller: controller,
-            scrollSync: scrollSync
+            sync: controller.dualSync
         )
+    }
+
+    /// The fields and buttons of the formatted editor's link prompt.
+    @ViewBuilder
+    private func promptFields(_ prompt: PadLinkPrompt) -> some View {
+        switch prompt.kind {
+        case .link:
+            TextField("https://", text: $promptAddress)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if prompt.needsLabel {
+                TextField("Text to show", text: $promptLabel)
+            }
+        case .wikiLink:
+            TextField("Sheet name", text: $promptAddress)
+        case .image:
+            TextField("https://", text: $promptAddress)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+        Button(prompt.canRemove ? "Update" : "Add") {
+            controller.finishPrompt(prompt, address: promptAddress, label: promptLabel)
+        }
+        if prompt.canRemove {
+            Button("Remove Link", role: .destructive) { controller.removeLink(prompt) }
+        }
+        Button("Cancel", role: .cancel) {}
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            Picker("Layout", selection: $layoutRaw) {
-                Label("Editor", systemImage: "chevron.left.forwardslash.chevron.right").tag(Layout.editor.rawValue)
+            Picker("Layout", selection: Binding(get: { layoutRaw }, set: { value in
+                controller.layoutWillChange()
+                layoutRaw = value
+            })) {
+                Label("Raw", systemImage: "chevron.left.forwardslash.chevron.right").tag(Layout.editor.rawValue)
                 if sizeClass != .compact {
-                    Label("Split", systemImage: "rectangle.split.2x1").tag(Layout.split.rawValue)
+                    Label("Dual", systemImage: "rectangle.split.2x1").tag(Layout.split.rawValue)
                 }
-                Label("Preview", systemImage: "doc.richtext").tag(Layout.preview.rawValue)
+                Label("Formatted", systemImage: "doc.richtext").tag(Layout.preview.rawValue)
             }
             .pickerStyle(.segmented)
 
@@ -390,7 +456,7 @@ struct PadDocumentView: View {
     }
 
     private func insert(_ stored: PadImageStore.Stored) {
-        controller.insertBlock("![\(stored.alt)](\(stored.source))")
+        controller.addImage(alt: stored.alt, source: stored.source)
     }
 }
 

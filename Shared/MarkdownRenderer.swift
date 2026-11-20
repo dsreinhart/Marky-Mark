@@ -5,9 +5,14 @@
 //  Markdown → NSAttributedString for the rendered editor. The output carries the
 //  semantic attributes from MarkdownModel.swift plus the visual attributes
 //  produced by StyleEngine, so it can be dropped straight into the text view.
+//  Shared by the Mac and iPad formatted editors.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 struct MarkdownRenderer {
@@ -56,6 +61,15 @@ struct MarkdownRenderer {
         for (index, paragraph) in paragraphs.enumerated() {
             out.append(paragraph.content)
             if index < paragraphs.count - 1 || trailingNewline {
+                #if os(iOS)
+                if paragraph.content.length > 0, let raw = paragraph.content.attribute(.mmRawTable, at: 0, effectiveRange: nil) {
+                    // A table's newline belongs to it too.
+                    let end = NSMutableAttributedString(attributedString: newline(for: paragraph.block, paragraphStyle: paragraph.paragraphStyle))
+                    end.addAttribute(.mmRawTable, value: raw, range: NSRange(location: 0, length: end.length))
+                    out.append(end)
+                    continue
+                }
+                #endif
                 out.append(newline(for: paragraph.block, paragraphStyle: paragraph.paragraphStyle))
             }
         }
@@ -139,7 +153,12 @@ struct MarkdownRenderer {
                 result.append(Paragraph(content: NSMutableAttributedString(), block: info, paragraphStyle: nil))
             case .table(let headers, let rows):
                 _ = counter.next(for: BlockInfo(.tableCell))
+                #if os(macOS)
                 result.append(contentsOf: tableParagraphs(headers: headers, rows: rows))
+                #else
+                let source = markdown.components(separatedBy: "\n")[lines].joined(separator: "\n")
+                result.append(contentsOf: tableParagraphs(headers: headers, rows: rows, markdown: source))
+                #endif
             case .comment(let text):
                 let info = BlockInfo(.comment)
                 _ = counter.next(for: info)
@@ -190,6 +209,7 @@ struct MarkdownRenderer {
         return Paragraph(content: content, block: block, paragraphStyle: nil)
     }
 
+    #if os(macOS)
     /// Builds one paragraph per cell (header row first) backed by a shared NSTextTable.
     func tableParagraphs(headers: [String], rows: [[String]]) -> [Paragraph] {
         let columns = max(headers.count, rows.map(\.count).max() ?? 0, 1)
@@ -222,6 +242,46 @@ struct MarkdownRenderer {
         let body = Array(repeating: Array(repeating: "", count: max(columns, 1)), count: max(rows, 1))
         return tableParagraphs(headers: headers, rows: body)
     }
+    #else
+    /// iPadOS has no text tables: a table is one read-only paragraph of tab-separated rows (the
+    /// header in bold), saved back exactly as the Markdown it came from (`mmRawTable`). It is
+    /// edited in the Raw pane.
+    func tableParagraphs(headers: [String], rows: [[String]], markdown: String? = nil) -> [Paragraph] {
+        let columns = max(headers.count, rows.map(\.count).max() ?? 0, 1)
+        let allRows = [headers] + rows
+        func line(_ row: [String]) -> String {
+            "| " + (0..<columns).map { $0 < row.count ? row[$0] : "" }.joined(separator: " | ") + " |"
+        }
+        let source = markdown ?? ([line(headers), "|" + String(repeating: " --- |", count: columns)] + rows.map(line))
+            .joined(separator: "\n")
+        let block = BlockInfo(.tableCell)
+        let ps = engine.tableParagraphStyle(columns: columns, width: min(max(engine.style.maxWidth, 400), 720) - 16)
+        let content = NSMutableAttributedString()
+        for (rowIndex, row) in allRows.enumerated() {
+            if rowIndex > 0 {
+                content.append(NSAttributedString(string: MarkdownSyntax.lineSeparatorString,
+                                                  attributes: engine.attributes(block: block, inline: InlineStyle(), paragraphStyle: ps)))
+            }
+            for column in 0..<columns {
+                if column > 0 {
+                    content.append(NSAttributedString(string: "\t", attributes: engine.attributes(block: block, inline: InlineStyle(),
+                                                                                                 paragraphStyle: ps)))
+                }
+                content.append(inlineContent(column < row.count ? row[column] : "", block: block, paragraphStyle: ps,
+                                             isHeaderCell: rowIndex == 0))
+            }
+        }
+        content.addAttribute(.mmRawTable, value: source, range: NSRange(location: 0, length: content.length))
+        return [Paragraph(content: content, block: block, paragraphStyle: ps)]
+    }
+
+    /// An empty table with placeholder headers, used by the toolbar.
+    func emptyTableParagraphs(rows: Int, columns: Int) -> [Paragraph] {
+        let headers = (1...max(columns, 1)).map { "Header \($0)" }
+        let body = Array(repeating: Array(repeating: "", count: max(columns, 1)), count: max(rows, 1))
+        return tableParagraphs(headers: headers, rows: body)
+    }
+    #endif
 
     // MARK: - Inline
 

@@ -41,6 +41,8 @@ extension NSAttributedString.Key {
     nonisolated static let mmWikiLink = NSAttributedString.Key("mm.wikiLink")
     /// Footnote identifier of a `[^id]` reference; the run's text is the visible label.
     nonisolated static let mmFootnoteRef = NSAttributedString.Key("mm.footnoteRef")
+    /// iPad: the Markdown of a table shown read-only in the formatted view, saved back unchanged.
+    nonisolated static let mmRawTable = NSAttributedString.Key("mm.rawTable")
 }
 
 // MARK: - Blocks
@@ -147,6 +149,23 @@ nonisolated final class BlockInfo: NSObject {
     }
 
     override var description: String { "BlockInfo(\(kind), indent: \(indent))" }
+}
+
+// MARK: - Toolbar state
+
+/// What the formatting toolbar shows for the cursor in a formatted editor.
+nonisolated struct FormatState: Equatable {
+    var bold = false
+    var italic = false
+    var strike = false
+    var code = false
+    var highlight = false
+    var hasLink = false
+    /// The section at the cursor is folded (Mac).
+    var folded = false
+    var blockKind: BlockKind = .paragraph
+    var indent = 0
+    var hasSelection = false
 }
 
 // MARK: - Inline styles

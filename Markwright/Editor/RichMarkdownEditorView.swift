@@ -165,6 +165,8 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         private var lastChangeWasTyping = false
         /// True when the last change deleted or inserted a paragraph break.
         private var lastChangeSpannedParagraphs = false
+        /// True when the last change deleted a paragraph break (a Return only adds one).
+        private var lastChangeDeletedBreak = false
         /// Counts storage mutations made by normalization during the current edit.
         private var normalizationEdits = 0
         /// Typing attributes chosen with an empty selection (e.g. ⌘B before typing); kept until the cursor moves.
@@ -577,6 +579,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
                     let removed = affectedCharRange.length > 0 && NSMaxRange(affectedCharRange) <= length
                         ? nsString.substring(with: affectedCharRange) : ""
                     lastChangeSpannedParagraphs = removed.contains("\n") || replacementString.contains("\n")
+                    lastChangeDeletedBreak = removed.contains("\n")
                 }
             } else {
                 lastChangeWasTyping = false
@@ -709,7 +712,9 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             lastChangeWasTyping = false
 
             let spanned = lastChangeSpannedParagraphs
+            let deletedBreak = lastChangeDeletedBreak
             lastChangeSpannedParagraphs = false
+            lastChangeDeletedBreak = false
             normalizationEdits = 0
 
             let start = paragraphRange(at: max(edited.location - 1, 0)).location
@@ -717,7 +722,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             let end = NSMaxRange(paragraphRange(at: endLocation))
             normalize(from: start, to: end)
             renumberOrderedLists()
-            if spanned { removeEmptyLeftoverParagraph() }
+            if deletedBreak { removeEmptyLeftoverParagraph() }
             if wasTyping { applyMarkdownShortcuts() }
             if !foldedHeadings.isEmpty { recomputeFolds() }
 

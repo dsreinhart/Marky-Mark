@@ -4,10 +4,16 @@
 //
 //  Turns the semantic attributes stored in the rendered editor (see
 //  MarkdownModel.swift) into fonts, colors and paragraph styles, using the
-//  user's ThemeSettings.
+//  user's ThemeSettings. Shared by the Mac and iPad formatted editors; iPadOS
+//  has no text blocks, so there the quote bars, code panels and rules are drawn
+//  by the editor's layout manager in the room these paragraph styles leave.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Snapshot of the theme used by the rendered editor. Equality is based on the
@@ -15,52 +21,52 @@ import SwiftUI
 struct EditorStyle: Equatable {
     let version: Int
     let bodySize: CGFloat
-    let headingColor: NSColor
-    let linkColor: NSColor
-    let blockquoteBarColor: NSColor
+    let headingColor: PlatformColor
+    let linkColor: PlatformColor
+    let blockquoteBarColor: PlatformColor
     let blockquoteItalic: Bool
-    let inlineCodeBackground: NSColor
-    let codeBlockBackground: NSColor
-    let strikethroughColor: NSColor
-    let taskCheckedColor: NSColor
-    let tableHeaderBackground: NSColor
+    let inlineCodeBackground: PlatformColor
+    let codeBlockBackground: PlatformColor
+    let strikethroughColor: PlatformColor
+    let taskCheckedColor: PlatformColor
+    let tableHeaderBackground: PlatformColor
     let headingDividers: Bool
     let fontFamily: String
     let lineSpacing: CGFloat
     let maxWidth: CGFloat
     /// nil means follow the system appearance.
-    let editorBackground: NSColor?
-    let textColor: NSColor
+    let editorBackground: PlatformColor?
+    let textColor: PlatformColor
 
     init(theme: ThemeSettings) {
         version = theme.version
         bodySize = CGFloat(theme.bodyFontSize)
-        headingColor = Self.nsColor(theme.headingColor, default: ThemeSettings.defaultHeadingColor, fallback: .labelColor)
-        linkColor = Self.nsColor(theme.linkColor, default: ThemeSettings.defaultLinkColor, fallback: .linkColor)
-        blockquoteBarColor = Self.nsColor(theme.blockquoteBarColor, default: ThemeSettings.defaultBlockquoteBarColor, fallback: .controlAccentColor)
+        headingColor = Self.nsColor(theme.headingColor, default: ThemeSettings.defaultHeadingColor, fallback: .mmLabel)
+        linkColor = Self.nsColor(theme.linkColor, default: ThemeSettings.defaultLinkColor, fallback: .mmLink)
+        blockquoteBarColor = Self.nsColor(theme.blockquoteBarColor, default: ThemeSettings.defaultBlockquoteBarColor, fallback: .mmAccent)
         blockquoteItalic = theme.blockquoteItalic
-        inlineCodeBackground = Self.nsColor(theme.inlineCodeBackground, default: ThemeSettings.defaultInlineCodeBackground, fallback: .controlBackgroundColor)
-        codeBlockBackground = Self.nsColor(theme.codeBlockBackground, default: ThemeSettings.defaultCodeBlockBackground, fallback: .controlBackgroundColor)
-        strikethroughColor = Self.nsColor(theme.strikethroughColor, default: ThemeSettings.defaultStrikethroughColor, fallback: .secondaryLabelColor)
+        inlineCodeBackground = Self.nsColor(theme.inlineCodeBackground, default: ThemeSettings.defaultInlineCodeBackground, fallback: .mmControlBackground)
+        codeBlockBackground = Self.nsColor(theme.codeBlockBackground, default: ThemeSettings.defaultCodeBlockBackground, fallback: .mmControlBackground)
+        strikethroughColor = Self.nsColor(theme.strikethroughColor, default: ThemeSettings.defaultStrikethroughColor, fallback: .mmSecondaryLabel)
         taskCheckedColor = Self.nsColor(theme.taskCheckedColor, default: ThemeSettings.defaultTaskCheckedColor, fallback: .systemGreen)
-        tableHeaderBackground = Self.nsColor(theme.tableHeaderBackground, default: ThemeSettings.defaultTableHeaderBackground, fallback: .controlBackgroundColor)
+        tableHeaderBackground = Self.nsColor(theme.tableHeaderBackground, default: ThemeSettings.defaultTableHeaderBackground, fallback: .mmControlBackground)
         headingDividers = theme.headingDividers
         fontFamily = theme.editorFont
         lineSpacing = CGFloat(theme.lineSpacing)
         maxWidth = CGFloat(theme.editorMaxWidth)
         if theme.useCustomEditorColors {
-            editorBackground = NSColor(theme.editorBackground)
-            textColor = NSColor(theme.editorTextColor)
+            editorBackground = PlatformColor(theme.editorBackground)
+            textColor = PlatformColor(theme.editorTextColor)
         } else {
             editorBackground = nil
-            textColor = .labelColor
+            textColor = .mmLabel
         }
     }
 
-    /// Theme defaults map straight to AppKit's dynamic colors; only user-picked colors go through SwiftUI conversion.
-    private static func nsColor(_ color: Color, default defaultColor: Color, fallback: NSColor) -> NSColor {
+    /// Theme defaults map straight to the system's dynamic colors; only user-picked colors go through SwiftUI conversion.
+    private static func nsColor(_ color: Color, default defaultColor: Color, fallback: PlatformColor) -> PlatformColor {
         if color == defaultColor { return fallback }
-        return NSColor(color)
+        return PlatformColor(color)
     }
 
     static func == (lhs: EditorStyle, rhs: EditorStyle) -> Bool {
@@ -87,32 +93,42 @@ final class StyleEngine {
 
     // MARK: - Fonts
 
-    var bodyFont: NSFont { baseFont(size: style.bodySize, weight: .regular) }
+    var bodyFont: PlatformFont { baseFont(size: style.bodySize, weight: .regular) }
 
     /// The editor's proportional font for a size and weight, honoring the font-family setting.
-    func baseFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {
+    func baseFont(size: CGFloat, weight: PlatformFont.Weight) -> PlatformFont {
         switch style.fontFamily {
         case "system", "":
             return .systemFont(ofSize: size, weight: weight)
         case "serif", "rounded":
+            #if os(macOS)
             let design: NSFontDescriptor.SystemDesign = style.fontFamily == "serif" ? .serif : .rounded
             let descriptor = NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(design)
             return descriptor.flatMap { NSFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size, weight: weight)
+            #else
+            let design: UIFontDescriptor.SystemDesign = style.fontFamily == "serif" ? .serif : .rounded
+            let descriptor = UIFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(design)
+            return descriptor.map { UIFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size, weight: weight)
+            #endif
         case "monospaced":
             return .monospacedSystemFont(ofSize: size, weight: weight)
         default:
-            guard let font = NSFont(name: style.fontFamily, size: size) else {
+            guard let font = PlatformFont(name: style.fontFamily, size: size) else {
                 return .systemFont(ofSize: size, weight: weight)
             }
             if weight == .regular { return font }
             let bold = weight == .bold || weight == .semibold || weight == .heavy
+            #if os(macOS)
             return bold ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
+            #else
+            return bold ? font.adding(bold: true, italic: false) : font
+            #endif
         }
     }
 
-    func font(for block: BlockInfo, inline: InlineStyle, isHeaderCell: Bool = false) -> NSFont {
+    func font(for block: BlockInfo, inline: InlineStyle, isHeaderCell: Bool = false) -> PlatformFont {
         var size = style.bodySize
-        var weight: NSFont.Weight = .regular
+        var weight: PlatformFont.Weight = .regular
         var monospaced = inline.code
 
         switch block.kind {
@@ -136,20 +152,24 @@ final class StyleEngine {
         if monospaced {
             let isCodeBlock: Bool
             if case .codeBlock = block.kind { isCodeBlock = true } else { isCodeBlock = false }
-            return NSFont.monospacedSystemFont(ofSize: size, weight: (inline.bold && !isCodeBlock) ? .bold : .regular)
+            return PlatformFont.monospacedSystemFont(ofSize: size, weight: (inline.bold && !isCodeBlock) ? .bold : .regular)
         }
 
-        var font = baseFont(size: size, weight: weight)
-        var traits: NSFontTraitMask = []
-        if inline.bold { traits.insert(.boldFontMask) }
         var quoteItalic = false
         if case .blockquote = block.kind { quoteItalic = style.blockquoteItalic }
         if case .comment = block.kind { quoteItalic = true }
+        #if os(macOS)
+        var font = baseFont(size: size, weight: weight)
+        var traits: NSFontTraitMask = []
+        if inline.bold { traits.insert(.boldFontMask) }
         if inline.italic || quoteItalic { traits.insert(.italicFontMask) }
         if !traits.isEmpty {
             font = NSFontManager.shared.convert(font, toHaveTrait: traits)
         }
         return font
+        #else
+        return baseFont(size: size, weight: weight).adding(bold: inline.bold, italic: inline.italic || quoteItalic)
+        #endif
     }
 
     // MARK: - Paragraph styles
@@ -162,6 +182,21 @@ final class StyleEngine {
         switch block.kind {
         case .paragraph:
             ps.paragraphSpacing = 10
+        case .footnote:
+            ps.firstLineHeadIndent = 4
+            ps.headIndent = 4 + Self.listMarkerWidth
+            ps.tabStops = [NSTextTab(textAlignment: .left, location: 4 + Self.listMarkerWidth)]
+            ps.paragraphSpacing = 4
+        case .bullet, .ordered, .task:
+            let base = CGFloat(block.indent) * Self.listIndentStep + 4
+            ps.firstLineHeadIndent = base
+            ps.headIndent = base + Self.listMarkerWidth
+            ps.tabStops = [NSTextTab(textAlignment: .left, location: base + Self.listMarkerWidth)]
+            ps.defaultTabInterval = Self.listMarkerWidth
+            ps.paragraphSpacing = 3
+        case .tableCell:
+            break
+        #if os(macOS)
         case .comment:
             let note = Self.fullWidthBlock()
             note.setWidth(2, type: .absoluteValueType, for: .border, edge: .minX)
@@ -189,18 +224,6 @@ final class StyleEngine {
                 divider.setWidth(4, type: .absoluteValueType, for: .padding, edge: .maxY)
                 ps.textBlocks = [divider]
             }
-        case .footnote:
-            ps.firstLineHeadIndent = 4
-            ps.headIndent = 4 + Self.listMarkerWidth
-            ps.tabStops = [NSTextTab(textAlignment: .left, location: 4 + Self.listMarkerWidth)]
-            ps.paragraphSpacing = 4
-        case .bullet, .ordered, .task:
-            let base = CGFloat(block.indent) * Self.listIndentStep + 4
-            ps.firstLineHeadIndent = base
-            ps.headIndent = base + Self.listMarkerWidth
-            ps.tabStops = [NSTextTab(textAlignment: .left, location: base + Self.listMarkerWidth)]
-            ps.defaultTabInterval = Self.listMarkerWidth
-            ps.paragraphSpacing = 3
         case .blockquote:
             let quote = Self.fullWidthBlock()
             quote.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
@@ -227,8 +250,37 @@ final class StyleEngine {
             ps.textBlocks = [rule]
             ps.paragraphSpacingBefore = 8
             ps.paragraphSpacing = 14
-        case .tableCell:
-            break
+        #else
+        case .comment:
+            ps.firstLineHeadIndent = Self.quoteIndent
+            ps.headIndent = Self.quoteIndent
+            ps.paragraphSpacingBefore = 4
+            ps.paragraphSpacing = 14
+        case .frontMatter:
+            ps.firstLineHeadIndent = Self.codeInset
+            ps.headIndent = Self.codeInset
+            ps.tailIndent = -Self.codeInset
+            ps.paragraphSpacingBefore = Self.codeInset
+            ps.paragraphSpacing = 14 + Self.codeInset
+        case .heading(let level):
+            ps.paragraphSpacingBefore = level <= 2 ? 14 : 10
+            ps.paragraphSpacing = style.headingDividers && level <= 2 ? 6 + Self.headingRuleGap : 6
+        case .blockquote:
+            ps.firstLineHeadIndent = Self.quoteIndent
+            ps.headIndent = Self.quoteIndent
+            ps.paragraphSpacingBefore = 4
+            ps.paragraphSpacing = 14
+        case .codeBlock:
+            ps.firstLineHeadIndent = Self.codeInset
+            ps.headIndent = Self.codeInset
+            ps.tailIndent = -Self.codeInset
+            ps.paragraphSpacingBefore = Self.codeInset
+            ps.paragraphSpacing = 10 + Self.codeInset
+            ps.lineSpacing = 1
+        case .horizontalRule:
+            ps.paragraphSpacingBefore = 8
+            ps.paragraphSpacing = 14
+        #endif
         }
 
         let immutable = ps.copy() as! NSParagraphStyle
@@ -236,6 +288,29 @@ final class StyleEngine {
         return immutable
     }
 
+    #if os(iOS)
+    /// Room for the quote and comment bars, and the padding inside code and metadata panels.
+    static let quoteIndent: CGFloat = 16
+    static let codeInset: CGFloat = 10
+    /// Space between a heading and the divider drawn under it.
+    static let headingRuleGap: CGFloat = 6
+
+    /// A table shown in tab-separated columns, one every so many points.
+    func tableParagraphStyle(columns: Int, width: CGFloat) -> NSParagraphStyle {
+        let ps = NSMutableParagraphStyle()
+        let column = max(floor(width / CGFloat(max(columns, 1))), 60)
+        ps.tabStops = (1..<max(columns, 1)).map { NSTextTab(textAlignment: .left, location: CGFloat($0) * column + 8) }
+        ps.defaultTabInterval = column
+        ps.firstLineHeadIndent = 8
+        ps.headIndent = 8
+        ps.lineSpacing = 6
+        ps.paragraphSpacingBefore = 10
+        ps.paragraphSpacing = 18
+        return ps.copy() as! NSParagraphStyle
+    }
+    #endif
+
+    #if os(macOS)
     /// A text block that spans the full line width. Without an explicit width,
     /// TextKit 1 lays a block out one character per line.
     private static func fullWidthBlock() -> NSTextBlock {
@@ -262,6 +337,7 @@ final class StyleEngine {
         ps.paragraphSpacing = isLastRow ? 10 : 0
         return ps.copy() as! NSParagraphStyle
     }
+    #endif
 
     // MARK: - Attribute dictionaries
 
@@ -291,12 +367,12 @@ final class StyleEngine {
         var strike = inline.strike
         switch block.kind {
         case .heading: color = style.headingColor
-        case .footnote: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
-        case .blockquote: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
-        case .comment: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.6)
-        case .frontMatter: color = style.editorBackground == nil ? .secondaryLabelColor : style.textColor.withAlphaComponent(0.7)
+        case .footnote: color = style.editorBackground == nil ? .mmSecondaryLabel : style.textColor.withAlphaComponent(0.7)
+        case .blockquote: color = style.editorBackground == nil ? .mmSecondaryLabel : style.textColor.withAlphaComponent(0.7)
+        case .comment: color = style.editorBackground == nil ? .mmSecondaryLabel : style.textColor.withAlphaComponent(0.6)
+        case .frontMatter: color = style.editorBackground == nil ? .mmSecondaryLabel : style.textColor.withAlphaComponent(0.7)
         case .task(let checked) where checked:
-            color = .secondaryLabelColor
+            color = .mmSecondaryLabel
             strike = true
         default: break
         }
@@ -309,10 +385,12 @@ final class StyleEngine {
         } else if inline.footnoteRef != nil {
             color = style.linkColor
             attrs[.baselineOffset] = style.bodySize * 0.4
+            #if os(macOS)
             attrs[.cursor] = NSCursor.pointingHand
+            #endif
         } else if inline.tag {
-            color = .controlAccentColor
-            attrs[.backgroundColor] = NSColor.controlAccentColor.withAlphaComponent(0.12)
+            color = .mmAccent
+            attrs[.backgroundColor] = PlatformColor.mmAccent.withAlphaComponent(0.12)
         } else if inline.strike {
             color = style.strikethroughColor
         }
@@ -324,7 +402,7 @@ final class StyleEngine {
             attrs[.backgroundColor] = style.inlineCodeBackground.withAlphaComponent(0.5)
         }
         if inline.highlight {
-            attrs[.backgroundColor] = NSColor.systemYellow.withAlphaComponent(0.35)
+            attrs[.backgroundColor] = PlatformColor.systemYellow.withAlphaComponent(0.35)
         }
         inline.apply(to: &attrs)
         return attrs
@@ -333,22 +411,25 @@ final class StyleEngine {
     /// Attributes for the text part of a list marker ("•\t", "1.\t", "\t" after a checkbox).
     func markerAttributes(block: BlockInfo) -> [NSAttributedString.Key: Any] {
         if case .footnote = block.kind {
-            return [
+            var attrs: [NSAttributedString.Key: Any] = [
                 .mmBlock: block,
                 .mmMarker: true,
                 .paragraphStyle: paragraphStyle(for: block),
-                .font: NSFont.monospacedDigitSystemFont(ofSize: style.bodySize * 0.7, weight: .medium),
+                .font: PlatformFont.monospacedDigitSystemFont(ofSize: style.bodySize * 0.7, weight: .medium),
                 .foregroundColor: style.linkColor,
                 .baselineOffset: style.bodySize * 0.35,
-                .cursor: NSCursor.pointingHand,
             ]
+            #if os(macOS)
+            attrs[.cursor] = NSCursor.pointingHand
+            #endif
+            return attrs
         }
         return [
             .mmBlock: block,
             .mmMarker: true,
             .paragraphStyle: paragraphStyle(for: block),
-            .font: NSFont.monospacedDigitSystemFont(ofSize: style.bodySize, weight: .regular),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .font: PlatformFont.monospacedDigitSystemFont(ofSize: style.bodySize, weight: .regular),
+            .foregroundColor: PlatformColor.mmSecondaryLabel,
         ]
     }
 
@@ -377,7 +458,7 @@ final class StyleEngine {
 
     func checkbox(checked: Bool) -> TaskCheckboxAttachment {
         TaskCheckboxAttachment(checked: checked,
-                               color: checked ? style.taskCheckedColor : NSColor.secondaryLabelColor,
+                               color: checked ? style.taskCheckedColor : PlatformColor.mmSecondaryLabel,
                                size: style.bodySize)
     }
 
@@ -405,7 +486,7 @@ final class StyleEngine {
     /// Whether an existing checkbox attachment still matches the block and theme.
     func checkboxIsCurrent(_ box: TaskCheckboxAttachment, for block: BlockInfo) -> Bool {
         guard case .task(let checked) = block.kind else { return false }
-        let expectedColor = checked ? style.taskCheckedColor : NSColor.secondaryLabelColor
+        let expectedColor = checked ? style.taskCheckedColor : PlatformColor.mmSecondaryLabel
         return box.checked == checked && box.size == style.bodySize && box.color.isEqual(expectedColor)
     }
 }

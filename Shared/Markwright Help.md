@@ -414,24 +414,24 @@ The iPad app edits the same plain Markdown files as the Mac. It opens them from 
 
 Markwright starts in a file browser: tap a document to open it, or tap **+** to create one. **More > Recent Files…** returns to the browser. Edits are saved automatically as you type.
 
-### Editor, Split and Preview
+### Raw, Dual and Formatted
 
-The control at the top right switches between three layouts.
+The control at the top right switches between three layouts, as on the Mac.
 
-- **Editor** shows the Markdown source with syntax highlighting.
-- **Preview** shows the formatted document, read only. Tap a checkbox to tick a task, a link to follow it, and a small footnote number to jump to its note; tap the number at the start of the note to come back.
-- **Split** shows both side by side. The panes scroll together: scroll either one and the other follows, block by block, and both reach the end of the document at the same time. Split needs a wide window; in a narrow one the editor shows on its own.
+- **Raw** shows the Markdown source with syntax highlighting.
+- **Formatted** shows the document formatted, and you edit it directly: type, press Return to continue a list (Return on an empty item ends it), Tab and Shift-Tab to indent and outdent list items, and type `# `, `- `, `1. `, `[ ] ` or `> ` at the start of a line to turn it into a heading, list, task or quote. Tap a checkbox to tick a task, a wiki link to read the sheet it names, and a small footnote number to jump to its note; tap the number at the start of the note to come back. With the cursor in a web link, the edit menu has **Open Link**. Copying puts Markdown on the clipboard, and pasting Markdown formats it.
+- **Dual** shows both side by side, and you can type in either. The panes scroll together: scroll either one and the other follows, block by block, and both reach the end of the document at the same time. Dual needs a wide window; in a narrow one Raw shows on its own.
 
-Formatting is done in the source: the formatted view on iPad can't be edited directly.
+Switching layouts keeps your place. Tables show as a grid in the formatted view but can't be typed into there: edit them in Raw.
 
 ### The toolbar
 
-The strip above the editor inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. iPadOS requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so allowing a top-level folder once covers all your documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
+The strip above the editors works on whichever pane has the cursor. In the formatted view it formats the text and lights up what's on at the cursor; a link asks for its address, a wiki link for the sheet's name. In Raw it inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. iPadOS requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so allowing a top-level folder once covers all your documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
 
 ### The More menu
 
 - **Typewriter Scrolling** keeps the line you are typing in the middle of the screen.
-- **Focus** dims everything except the current **Paragraph** or **Sentence**.
+- **Focus** dims everything except the current **Paragraph** or **Sentence**, in either view. In Dual it follows the cursor.
 - **Export Preview…** shows the document in the export styles (section 10). From there, or straight from the menu, share it as HTML, PDF or RTF, or print it. Images saved beside the document are embedded.
 - **Markwright Help**, the **Markdown Cheat Sheet** and **Settings…**, which has the same themes, fonts and colors as the Mac.
 
@@ -439,7 +439,7 @@ The **Dashboard** button opens the outline, statistics, writing goal, tags and l
 
 ### What's only on the Mac
 
-The editable formatted view, composition mode, the library sidebar and Quick Open, versions, Word export, folding and the keyboard shortcuts are Mac features for now.
+Editing table cells in the formatted view, composition mode, the library sidebar and Quick Open, versions, Word export, folding and the keyboard shortcuts are Mac features for now.
 
 ---
 
