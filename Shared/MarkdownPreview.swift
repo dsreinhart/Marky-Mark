@@ -11,8 +11,6 @@ import SwiftUI
 struct MarkdownPreview: View {
     let markdown: String
     var baseURL: URL? = nil
-    /// Called with the index of a task item whose checkbox was tapped.
-    var onToggleTask: ((Int) -> Void)? = nil
     /// Block briefly tinted after a footnote jump, so the landing place is clear even when
     /// it was already on screen.
     @State private var highlighted: Int? = nil
@@ -20,16 +18,15 @@ struct MarkdownPreview: View {
     @Environment(\.openURL) private var outerOpenURL
     private var theme = ThemeSettings.shared
 
-    init(markdown: String, baseURL: URL? = nil, onToggleTask: ((Int) -> Void)? = nil) {
+    init(markdown: String, baseURL: URL? = nil) {
         self.markdown = markdown
         self.baseURL = baseURL
-        self.onToggleTask = onToggleTask
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                PreviewContent(markdown: markdown, baseURL: baseURL, onToggleTask: onToggleTask, highlighted: highlighted)
+                PreviewContent(markdown: markdown, baseURL: baseURL, highlighted: highlighted)
                     .equatable()
             }
             .environment(\.openURL, OpenURLAction { url in
@@ -117,42 +114,26 @@ struct FootnoteJump: Equatable {
 private struct PreviewContent: View, Equatable {
     let markdown: String
     let baseURL: URL?
-    let onToggleTask: ((Int) -> Void)?
-    /// Whether task checkboxes respond, compared in place of the closure.
-    private let tasksEnabled: Bool
+    let highlighted: Int?
     private var theme = ThemeSettings.shared
 
-    let highlighted: Int?
-
-    init(markdown: String, baseURL: URL?, onToggleTask: ((Int) -> Void)?, highlighted: Int?) {
+    init(markdown: String, baseURL: URL?, highlighted: Int?) {
         self.markdown = markdown
         self.baseURL = baseURL
-        self.onToggleTask = onToggleTask
         self.highlighted = highlighted
-        tasksEnabled = onToggleTask != nil
     }
 
     nonisolated static func == (a: PreviewContent, b: PreviewContent) -> Bool {
-        a.markdown == b.markdown && a.baseURL == b.baseURL
-            && a.tasksEnabled == b.tasksEnabled && a.highlighted == b.highlighted
+        a.markdown == b.markdown && a.baseURL == b.baseURL && a.highlighted == b.highlighted
     }
 
     private struct Item: Identifiable {
         let id: Int
         let block: MarkdownBlock
-        let taskIndex: Int?
     }
 
     private func makeItems() -> [Item] {
-        let parsed = MarkdownParser.parseWithLines(markdown)
-        var result: [Item] = []
-        var tasks = 0
-        for (index, entry) in parsed.enumerated() {
-            var taskIndex: Int? = nil
-            if case .taskListItem = entry.block { taskIndex = tasks; tasks += 1 }
-            result.append(Item(id: index, block: entry.block, taskIndex: taskIndex))
-        }
-        return result
+        MarkdownParser.parseWithLines(markdown).enumerated().map { Item(id: $0.offset, block: $0.element.block) }
     }
 
     var body: some View {
@@ -227,15 +208,9 @@ private struct PreviewContent: View, Equatable {
             listRow(marker: Text("\(number).").foregroundStyle(.secondary).monospacedDigit(), text: text, indent: indent)
         case .taskListItem(let checked, let text, let indent):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Button {
-                    if let index = item.taskIndex { onToggleTask?(index) }
-                } label: {
-                    Image(systemName: checked ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(checked ? theme.taskCheckedColor : .secondary)
-                        .font(bodyFont)
-                }
-                .buttonStyle(.plain)
-                .disabled(onToggleTask == nil)
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(checked ? theme.taskCheckedColor : .secondary)
+                    .font(bodyFont)
                 Text(inline(text))
                     .font(bodyFont)
                     .strikethrough(checked, color: .secondary)

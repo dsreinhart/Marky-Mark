@@ -584,16 +584,4 @@ final class PadEditorController {
         let end = NSRange(location: updated.length, length: 0)
         replace(end, with: tail, selecting: NSRange(location: updated.length + (tail as NSString).length, length: 0))
     }
-
-    /// Flips the nth task checkbox in the document.
-    func toggleTask(_ index: Int) {
-        let text = currentText
-        guard let regex = try? NSRegularExpression(pattern: #"^(\s*[*\-+]\s+)\[([ xX])\]"#, options: .anchorsMatchLines) else { return }
-        let matches = regex.matches(in: text as String, range: NSRange(location: 0, length: text.length))
-        guard matches.indices.contains(index) else { return }
-        let box = matches[index].range(at: 2)
-        let checked = text.substring(with: box) != " "
-        let selection = textView?.selectedRange ?? NSRange(location: 0, length: 0)
-        replace(box, with: checked ? " " : "x", selecting: selection)
-    }
 }
