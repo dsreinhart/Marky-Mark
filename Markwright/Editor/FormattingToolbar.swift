@@ -12,6 +12,8 @@ import UniformTypeIdentifiers
 struct FormattingToolbar: View {
     @Bindable var controller: RichEditorController
     let documentURL: URL?
+    /// The document's Markdown, so a new picture goes into the picture folder it already uses.
+    var documentText: () -> String = { "" }
 
     @State private var linkURL = ""
     @State private var linkText = ""
@@ -191,29 +193,18 @@ struct FormattingToolbar: View {
         .padding(14)
     }
 
+    /// The file window closes the popover, so a chosen picture goes in straight away.
     private func chooseImageFile() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose an image"
-        if panel.runModal() == .OK, let url = panel.url {
-            imageSource = relativePath(for: url)
-            if imageAlt.isEmpty {
-                imageAlt = url.deletingPathExtension().lastPathComponent
-            }
-        }
-    }
-
-    /// Paths inside the document's folder are stored relative to it.
-    private func relativePath(for url: URL) -> String {
-        let path = url.standardizedFileURL.path
-        guard let documentURL else { return path }
-        let folder = documentURL.deletingLastPathComponent().standardizedFileURL.path
-        if path.hasPrefix(folder + "/") {
-            return String(path.dropFirst(folder.count + 1))
-        }
-        return path
+        panel.message = "Choose a picture"
+        controller.showImagePopover = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        imageSource = ""
+        imageAlt = ""
+        MacPictureInsert.insert(fileAt: url, controller: controller, documentURL: documentURL, text: documentText())
     }
 
     private func commitImage() {

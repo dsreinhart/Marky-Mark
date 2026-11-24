@@ -16,7 +16,8 @@ struct ExportPreviewView: View {
     private var html: String {
         HTMLExporter.document(markdown: document.text,
                               title: document.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled",
-                              style: style)
+                              style: style,
+                              documentURL: document.fileURL)
     }
 
     var body: some View {
@@ -32,7 +33,7 @@ struct ExportPreviewView: View {
                 Menu("Export") {
                     Button("HTML…") { Exporter.exportHTML(document, style: style) }
                     Button("PDF…") { Exporter.exportPDF(document, style: style, window: NSApp.keyWindow) }
-                    Button("Word (.docx)…") { Exporter.exportWord(document, style: style) }
+                    Button("Word (.docx)…") { Exporter.exportWord(document) }
                     Button("Rich Text (.rtf)…") { Exporter.exportRTF(document, style: style) }
                     Divider()
                     Button("Copy as HTML") { Exporter.copyHTML(document) }

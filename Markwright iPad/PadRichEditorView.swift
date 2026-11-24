@@ -30,6 +30,8 @@ struct PadRichEditorView: UIViewRepresentable {
         let textView = PadRichTextView.make()
         textView.coordinator = coordinator
         textView.delegate = coordinator
+        textView.textStorage.delegate = coordinator
+        textView.isFindInteractionEnabled = true
         textView.font = coordinator.engine.bodyFont
         textView.textColor = style.textColor
         textView.allowsEditingTextAttributes = false
@@ -286,8 +288,24 @@ final class PadRichTextView: UITextView {
         coordinator?.tapAction(atContainerPoint: containerPoint(point))
     }
 
+    /// The selected picture's handles; the text view's own gestures leave them alone.
+    weak var imageHandles: PadImageHandleOverlay?
+
+    /// Hides UIKit's cursor, selection tint and grabbers (while a picture shows its own handles).
+    func setSystemSelectionHidden(_ hidden: Bool) {
+        for case let display as UITextSelectionDisplayInteraction in interactions where display.isActivated == hidden {
+            display.isActivated = !hidden
+        }
+    }
+
+    private func isOnImageHandle(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard let handles = imageHandles, !handles.isHidden else { return false }
+        return handles.corner(at: recognizer.location(in: handles)) != nil
+    }
+
     /// A tap on a checkbox, footnote or wiki link acts on it instead of placing the cursor.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer.view === self, isOnImageHandle(gestureRecognizer) { return false }
         if gestureRecognizer === actionTap {
             return tapAction(at: gestureRecognizer.location(in: self)) != nil
         }
@@ -461,10 +479,60 @@ extension PadRichCoordinator: UITextViewDelegate {
 /// iPadOS has no text blocks, so the layout manager draws what they draw on the Mac: a bar beside a
 /// quote or comment, a panel behind code and front matter, a rule's line, a line under large headings
 /// and a frame around a table. It also dims the text outside the focus range.
-final class PadRichLayoutManager: NSLayoutManager {
+final class PadRichLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     weak var engine: StyleEngine?
     /// Text outside this range is dimmed (Focus); nil dims nothing.
     var focusRange: NSRange?
+    /// Bodies of folded sections: laid out with no glyphs and no height.
+    var foldedRanges: [NSRange] = []
+    /// Headings whose sections are folded, tinted so the fold shows.
+    var foldedHeadings: [NSRange] = []
+
+    override init() {
+        super.init()
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        delegate = self
+    }
+
+    // MARK: Folding
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>, characterIndexes: UnsafePointer<Int>,
+                       font: UIFont, forGlyphRange glyphRange: NSRange) -> Int {
+        guard !foldedRanges.isEmpty, glyphRange.length > 0 else { return 0 }
+        var updated = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
+        var changed = false
+        for index in 0..<glyphRange.length where foldedRanges.contains(where: { NSLocationInRange(characterIndexes[index], $0) }) {
+            updated[index] = .null
+            changed = true
+        }
+        guard changed else { return 0 }
+        updated.withUnsafeBufferPointer { buffer in
+            layoutManager.setGlyphs(glyphs, properties: buffer.baseAddress!, characterIndexes: characterIndexes,
+                                    font: font, forGlyphRange: glyphRange)
+        }
+        return glyphRange.length
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,
+                       lineFragmentUsedRect: UnsafeMutablePointer<CGRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
+                       in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+        guard !foldedRanges.isEmpty else { return false }
+        let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        guard foldedRanges.contains(where: { NSLocationInRange(characterRange.location, $0) }) else { return false }
+        lineFragmentRect.pointee.size.height = 0
+        lineFragmentUsedRect.pointee.size.height = 0
+        baselineOffset.pointee = 0
+        return true
+    }
+
+    private func isFolded(_ location: Int) -> Bool {
+        foldedRanges.contains { NSLocationInRange(location, $0) }
+    }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         guard let focusRange, let context = UIGraphicsGetCurrentContext() else {
@@ -493,6 +561,16 @@ final class PadRichLayoutManager: NSLayoutManager {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first, let engine,
               let context = UIGraphicsGetCurrentContext(), storage.length > 0 else { return }
+        // A folded heading is tinted, as on the Mac.
+        for heading in foldedHeadings where NSMaxRange(heading) <= storage.length {
+            var rect = CGRect.null
+            enumerateLineFragments(forGlyphRange: glyphRange(forCharacterRange: heading, actualCharacterRange: nil)) { _, used, _, _, _ in
+                rect = rect.union(used)
+            }
+            guard !rect.isNull else { continue }
+            let tint = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -4, dy: -1)
+            fill(UIBezierPath(roundedRect: tint, cornerRadius: 4), PlatformColor.mmQuaternaryLabel.withAlphaComponent(0.18))
+        }
         let style = engine.style
         let text = storage.string as NSString
         let shown = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
@@ -504,7 +582,7 @@ final class PadRichLayoutManager: NSLayoutManager {
         while location < min(NSMaxRange(shown), storage.length) {
             let paragraph = text.paragraphRange(for: NSRange(location: location, length: 0))
             defer { location = NSMaxRange(paragraph) }
-            guard paragraph.length > 0,
+            guard paragraph.length > 0, !isFolded(paragraph.location),
                   let block = storage.attribute(.mmBlock, at: paragraph.location, effectiveRange: nil) as? BlockInfo else { continue }
             let kind = block.kind
             switch kind {

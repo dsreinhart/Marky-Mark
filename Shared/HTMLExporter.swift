@@ -275,7 +275,9 @@ enum HTMLExporter {
             case .strong(let kids): out += "<strong>\(render(kids))</strong>"
             case .strike(let kids): out += "<del>\(render(kids))</del>"
             case .link(let label, let url): out += "<a href=\"\(escapeAttribute(url))\">\(render(label))</a>"
-            case .image(let alt, let source): out += "<img src=\"\(escapeAttribute(embedded(source)))\" alt=\"\(escapeAttribute(alt))\">"
+            case .image(let alt, let source, let width):
+                let size = width.map { " style=\"width: \($0.css)\"" } ?? ""
+                out += "<img src=\"\(escapeAttribute(embedded(source)))\" alt=\"\(escapeAttribute(alt))\"\(size)>"
             case .highlight(let kids): out += "<mark>\(render(kids))</mark>"
             case .tag(let name): out += "<span class=\"tag\">#\(escape(name))</span>"
             case .wikiLink(let target, let label):

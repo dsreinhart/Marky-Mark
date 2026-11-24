@@ -119,7 +119,7 @@ struct ContentView: View {
     private var editorColumn: some View {
         VStack(spacing: 0) {
             if editorMode != .raw, !uiState.isComposing {
-                FormattingToolbar(controller: controller, documentURL: document.fileURL)
+                FormattingToolbar(controller: controller, documentURL: document.fileURL, documentText: { document.text })
                 Divider()
             }
             // Each pane keeps its place in this structure, so one that stays on screen
@@ -266,6 +266,8 @@ struct ContentView: View {
         }
         .onChange(of: document.fileURL, initial: true) { _, url in
             controller.documentURL = url
+            // Pictures beside the document need its folder's saved grant after a relaunch.
+            if let url { FolderAccess.begin(url.deletingLastPathComponent()) }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
             document.autosaveNow()

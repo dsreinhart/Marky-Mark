@@ -68,6 +68,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         scrollView.documentView = textView
 
         context.coordinator.textView = textView
+        textView.onColumnWidthChange = { [weak coordinator = context.coordinator] in coordinator?.rescaleImages() }
         context.coordinator.baseURL = baseURL
         context.coordinator.load(text)
         controller.editorsWillChange()
@@ -603,6 +604,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             textView.typingAttributes = effectiveTypingAttributes(at: selection.location)
             refreshState()
             applyBehaviors()
+            updateImageHandles()
         }
 
         private func effectiveTypingAttributes(at location: Int) -> [NSAttributedString.Key: Any] {
@@ -734,6 +736,7 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             textView.needsDisplay = true
             publish()
             refreshState()
+            updateImageHandles()
             if wasTyping { textView.showWikiCompletionsIfNeeded() }
             if textView.options.focus != .off {
                 EditorBehaviors.applyFocus(textView, mode: textView.options.focus,
@@ -1766,6 +1769,13 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             guard rect.contains(point) else { return false }
             let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
             guard charIndex < storage.length else { return false }
+            // A click on a picture selects it, which shows its resize handles.
+            if let image = storage.attribute(.attachment, at: charIndex, effectiveRange: nil) as? MarkdownImageAttachment,
+               image.isLoaded, event.clickCount == 1, event.modifierFlags.intersection([.shift, .command]).isEmpty {
+                textView.window?.makeFirstResponder(textView)
+                textView.selectedRange = NSRange(location: charIndex, length: 1)
+                return true
+            }
             if storage.attribute(.attachment, at: charIndex, effectiveRange: nil) is TaskCheckboxAttachment {
                 toggleTask(at: charIndex)
                 return true
@@ -1888,7 +1898,10 @@ struct RichMarkdownEditorView: NSViewRepresentable {
         func loadImages() {
             guard let storage else { return }
             var pendingCachedImages: [(NSImage, MarkdownImageAttachment)] = []
-            defer { for (image, attachment) in pendingCachedImages { apply(image: image, to: attachment) } }
+            defer {
+                for (image, attachment) in pendingCachedImages { apply(image: image, to: attachment) }
+                updateImageHandles()
+            }
             storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
                 guard let attachment = value as? MarkdownImageAttachment, !attachment.loadRequested else { return }
                 attachment.loadRequested = true
@@ -1906,22 +1919,152 @@ struct RichMarkdownEditorView: NSViewRepresentable {
             }
         }
 
-        private func apply(image: NSImage, to attachment: MarkdownImageAttachment) {
-            guard let textView, let storage else { return }
+        /// The widest an image may be drawn in the current text column.
+        private var maxImageWidth: CGFloat {
+            guard let textView else { return 600 }
             let containerWidth = textView.textContainer?.size.width ?? 0
             let viewWidth = (textView.enclosingScrollView?.contentSize.width ?? 0) - 2 * textView.textContainerInset.width
             let base = containerWidth > 50 ? containerWidth : (viewWidth > 50 ? viewWidth : 600)
             let padding = textView.textContainer?.lineFragmentPadding ?? 5
-            let maxWidth = min(max(base - 2 * padding - 8, 100), 720)
+            return min(max(base - 2 * padding - 8, 100), 720)
+        }
 
-            var size = image.size
-            if size.width > maxWidth {
-                let scale = maxWidth / size.width
-                size = NSSize(width: maxWidth, height: size.height * scale)
+        /// Fits loaded images to a new column width (a window resize, Dual, the sidebars).
+        func rescaleImages() {
+            guard let textView, let storage, length > 0 else { return }
+            let maxWidth = maxImageWidth
+            var changed = false
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
+                guard let attachment = value as? MarkdownImageAttachment, attachment.isLoaded,
+                      let image = attachment.image else { return }
+                let size = attachment.displaySize(natural: image.size, maxWidth: maxWidth)
+                if attachment.bounds.size != size {
+                    attachment.bounds = CGRect(origin: .zero, size: size)
+                    changed = true
+                }
             }
+            if changed {
+                textView.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: length), actualCharacterRange: nil)
+                textView.needsDisplay = true
+            }
+            updateImageHandles()
+        }
+
+        // MARK: Picture handles
+
+        private(set) var imageHandles: ImageHandleOverlay?
+        /// A handle drag in progress: the picture, its size when the drag began, the column width and
+        /// the width so far.
+        private var imageResize: (index: Int, attachment: MarkdownImageAttachment, start: CGSize, column: CGFloat, percent: Int)?
+
+        /// The picture the selection is exactly, if it has loaded.
+        private var selectedImage: (index: Int, attachment: MarkdownImageAttachment)? {
+            guard let textView, let storage else { return nil }
+            let selection = textView.selectedRange
+            guard selection.length == 1, NSMaxRange(selection) <= storage.length,
+                  let attachment = storage.attribute(.attachment, at: selection.location, effectiveRange: nil) as? MarkdownImageAttachment,
+                  attachment.isLoaded else { return nil }
+            return (selection.location, attachment)
+        }
+
+        /// Where a picture is drawn, in the text view's coordinates; nil when it's folded away.
+        private func imageFrame(at index: Int, attachment: MarkdownImageAttachment) -> CGRect? {
+            guard let textView, let layoutManager = textView.layoutManager else { return nil }
+            let range = NSRange(location: index, length: 1)
+            layoutManager.ensureLayout(forCharacterRange: range)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            // Attachment glyphs count as not shown (the attachment draws itself); a folded line has no height.
+            guard glyphs.length > 0 else { return nil }
+            let line = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            guard line.height > 0 else { return nil }
+            let location = layoutManager.location(forGlyphAt: glyphs.location)
+            let size = attachment.bounds.size
+            let origin = textView.textContainerOrigin
+            return CGRect(x: origin.x + line.minX + location.x,
+                          y: origin.y + line.minY + location.y - attachment.bounds.minY - size.height,
+                          width: size.width, height: size.height)
+        }
+
+        /// Shows the handles over the selected picture, or hides them.
+        func updateImageHandles() {
+            guard let textView else { return }
+            guard let (index, attachment) = selectedImage, let frame = imageFrame(at: index, attachment: attachment) else {
+                imageHandles?.isHidden = true
+                return
+            }
+            let overlay = imageHandles ?? makeImageHandles(in: textView)
+            let target = frame.insetBy(dx: -ImageResize.margin, dy: -ImageResize.margin)
+            if overlay.frame != target {
+                overlay.frame = target
+                textView.window?.invalidateCursorRects(for: overlay)
+            }
+            overlay.label = imageResize.map { "\($0.percent)%" }
+            overlay.isHidden = false
+            overlay.needsDisplay = true
+        }
+
+        private func makeImageHandles(in textView: NSTextView) -> ImageHandleOverlay {
+            let overlay = ImageHandleOverlay()
+            overlay.onDrag = { [weak self] corner, dx, ended in self?.dragImageHandle(corner, dx: dx, ended: ended) }
+            textView.addSubview(overlay)
+            imageHandles = overlay
+            return overlay
+        }
+
+        /// Sizes the picture as a handle moves; when the mouse goes up, writes the width.
+        private func dragImageHandle(_ corner: ImageResize.Corner, dx: CGFloat, ended: Bool) {
+            guard let textView, let layoutManager = textView.layoutManager else { return }
+            if imageResize == nil {
+                guard let (index, attachment) = selectedImage else { return }
+                imageResize = (index, attachment, attachment.bounds.size, maxImageWidth, 0)
+            }
+            guard var resize = imageResize, let image = resize.attachment.image else { return }
+            resize.percent = ImageResize.percent(startWidth: resize.start.width, dx: dx, corner: corner, columnWidth: resize.column)
+            imageResize = resize
+            let range = NSRange(location: resize.index, length: 1)
+            if ended {
+                // The old picture keeps its old size, for undo.
+                resize.attachment.bounds = CGRect(origin: .zero, size: resize.start)
+                imageResize = nil
+                setImageWidth(percent: resize.percent, at: resize.index)
+                return
+            }
+            let size = ImageResize.size(natural: image.size, percent: resize.percent, columnWidth: resize.column)
+            if resize.attachment.bounds.size != size {
+                resize.attachment.bounds = CGRect(origin: .zero, size: size)
+                layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+                textView.needsDisplay = true
+            }
+            updateImageHandles()
+        }
+
+        /// Gives the picture at `index` a width of `percent` of the column (`{width=N%}`), as one
+        /// undoable change, and keeps it selected.
+        func setImageWidth(percent: Int, at index: Int) {
+            guard let textView, let storage, index < storage.length,
+                  let old = storage.attribute(.attachment, at: index, effectiveRange: nil) as? MarkdownImageAttachment,
+                  let width = PictureWidth("\(percent)%") else { return }
+            let new = MarkdownImageAttachment(alt: old.alt, source: old.source, width: width, placeholderSize: engine.style.bodySize)
+            if let image = old.image, old.isLoaded {
+                new.image = image
+                new.isLoaded = true
+                new.loadRequested = true
+                new.bounds = CGRect(origin: .zero, size: new.displaySize(natural: image.size, maxWidth: maxImageWidth))
+            }
+            let range = NSRange(location: index, length: 1)
+            batch { addAttributes([.attachment: new], range: range) }
+            textView.selectedRange = range
+            loadImages()
+            updateImageHandles()
+        }
+
+        private func apply(image: NSImage, to attachment: MarkdownImageAttachment) {
+            guard let textView, let storage else { return }
+            let size = attachment.displaySize(natural: image.size, maxWidth: maxImageWidth)
             attachment.image = image
             attachment.bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
             attachment.isLoaded = true
+            defer { updateImageHandles() }
 
             var location: Int? = nil
             storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, range, stop in

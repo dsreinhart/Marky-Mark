@@ -2,7 +2,7 @@
 //  PadExporter.swift
 //  Markwright iPad
 //
-//  HTML, PDF and RTF files for the share sheet, printing, and the export preview.
+//  HTML, PDF, RTF and Word files for the share sheet, printing, and the export preview.
 //
 
 import SwiftUI
@@ -47,6 +47,17 @@ enum PadExporter {
                                       documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
         let url = try exportURL(title: title, ext: "rtf")
         try rtf.write(to: url)
+        return url
+    }
+
+    /// A Word document. Pictures beside the document or embedded in it go in; pictures on the
+    /// web are fetched first (10 seconds each at most) and left as their alt text if that fails.
+    static func wordFile(markdown: String, title: String, documentURL: URL? = nil) async throws -> URL {
+        let folder = documentURL?.deletingLastPathComponent()
+        if let folder { PadFolderAccess.begin(folder) }
+        let data = await DocxWriter.document(markdown: markdown, title: title, documentFolder: folder)
+        let url = try exportURL(title: title, ext: "docx")
+        try data.write(to: url)
         return url
     }
 

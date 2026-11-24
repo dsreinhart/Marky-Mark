@@ -106,7 +106,20 @@ In the formatted view lists behave as you would expect:
 
 ### Images
 
-**Format > Image…** (or the toolbar button) asks for an image file and an alt text. If the image lives inside the document's folder it is stored with a relative path, so the document keeps working when the folder moves. Images show inline at their natural size, left-aligned. In the raw editor the command inserts an image placeholder for you to fill in.
+**Format > Image…** (or the toolbar button) opens a small panel. Type a web address there and click Insert, or click **Choose…** to pick a picture file, which goes in as soon as you choose it. A picture already inside the document's folder is linked where it is. Any other picture is copied into a folder beside the document named after it, such as `Trip-notes-images`, the same folder the iPad uses, so the document keeps its pictures when it moves, after a restart and on your iPad. Large photos are scaled down to 1600 pixels on the long side.
+
+macOS lets Markwright write beside a document only in your library folder or in a folder you have allowed. The first time, Markwright asks: click **Allow Access…**, check that the window shows the document's folder, and click Allow. Allowing a folder covers every folder inside it, and it is remembered. **Embed in Text Instead** puts the picture in the Markdown itself, and so does a picture added to an untitled document. Images show inline at their natural size, left-aligned, shrunk to fit the column. In the raw editor the command inserts an image placeholder for you to fill in.
+
+To resize a picture in the formatted view, click it (tap it on iPad) to select it, then drag one of the handles at its corners. A badge shows the width as you drag, and when you let go it's written after the picture as a percentage of the column, such as `{width=40%}`. Undo puts the old size back. Click elsewhere in the text to deselect it; while a picture is selected, Delete removes it.
+
+You can also type a width straight after a picture in the raw editor:
+
+```markdown
+![Chart](Trip-notes-images/chart.png){width=50%}
+![Logo](logo.png){width=2in}
+```
+
+A percentage is of the text column, and in a Word document of the page's text width (6 inches). A width can also be in `px`, `pt`, `cm` or `mm`; a plain number means pixels, 96 to the inch. The height follows, keeping the picture's shape, and a picture is never wider than the column. The formatted view, the export preview and every export use the same width, and the formatted view keeps it when you edit around the picture. Without a width, a Word document shows each picture at the size it has on screen, up to the page's text width, and you can still resize it in your word processor.
 
 Exports embed local images into the output, so an exported HTML or PDF file stands alone (section 10).
 
@@ -180,6 +193,7 @@ Code blocks are fenced with three backticks on their own lines.
 **bold**  *italic*  ***both***  ~~struck~~  `code`  ==highlight==
 [link text](https://example.com)
 ![alt text](picture.png)
+![alt text](picture.png){width=50%}   (picture size, section 2)
 A sentence with a footnote reference.[^1]
 [[Another Sheet]]        (wiki link, section 5)
 #tag  #project/subtopic  (tags, section 6)
@@ -364,12 +378,12 @@ These are ready-made looks, not formal standards. Academic doesn't apply APA or 
 
 - **HTML**, a single file with its styles inline.
 - **PDF**, paginated from the same styled HTML.
-- **Word (.docx)** and **Rich Text (.rtf)** for people who edit in other apps.
+- **Word (.docx)** and **Rich Text (.rtf)** for people who edit in other apps. A Word document uses Word's own heading, list and table formatting rather than the preview's style, so it fits in with other Word documents; it keeps the pictures, links and footnotes.
 - **Copy as HTML** puts the HTML on the clipboard for pasting into a web editor or mail message.
 
 **File > Print…** (⌘P) prints the styled document.
 
-Images stored on your Mac are embedded in HTML and PDF output (up to 30 MB each), so the exported file stands alone. Web images are referenced by their address. Comments and front matter never appear in exports; footnotes are collected at the end with return links.
+Images stored on your Mac are embedded in HTML, PDF and Word output (HTML and PDF up to 30 MB each), so the exported file stands alone. Web images are referenced by their address in HTML and PDF, and fetched into Word documents. Comments and front matter never appear in exports; footnotes are collected at the end with return links.
 
 ---
 
@@ -408,38 +422,55 @@ Images stored on your Mac are embedded in HTML and PDF output (up to 30 MB each)
 
 ## 12. Markwright for iPad
 
-The iPad app edits the same plain Markdown files as the Mac. It opens them from the Files app, so a folder kept in iCloud Drive is shared between the two.
+The iPad app edits the same plain Markdown files as the Mac. Point it at the folder your Mac uses as its library, for example one in iCloud Drive, and both see the same sheets.
 
-### Opening documents
+### The library and opening documents
 
-Markwright starts in a file browser: tap a document to open it, or tap **+** to create one. **More > Recent Files…** returns to the browser. Edits are saved automatically as you type.
+Each window shows the **library** in a sidebar beside the sheet you are editing. The first time, tap **Choose Folder…** and pick a folder: its Markdown files become sheets and its subfolders groups, as on the Mac (section 5). iPadOS remembers the folder, so this is needed only once. Sheets still in iCloud are downloaded when the library lists them.
+
+- Tap a sheet to show it. Hide or show the sidebar with the sidebar button at the top left, or **⌥⌘L**.
+- The search field matches sheet names, tags and the text inside every sheet; tapping a result opens the sheet at the match. The **Tags** section lists every tag; tap one to show only its sheets.
+- **New Sheet** (the pencil button, or **⌘N**) creates `Untitled.md` in the library. Touch and hold a sheet or group to rename it, delete it, make a sheet inside a group, or open it in a new window.
+- **Quick Open** (**⌘⇧O**, or the **•••** menu at the top of the sidebar) finds a sheet by typing part of its name.
+- **Open a Document…** in that menu opens a file from anywhere in Files; it is listed under **Opened from Files** so you can come back to it. Choosing **Open in Markwright** in the Files app works too.
+- Tap the document's name at the top to **rename** it. Edits are saved automatically as you type, and changes made on another device appear within a few seconds. If both changed, Markwright asks which version to keep, as on the Mac.
 
 ### Raw, Dual and Formatted
 
 The control at the top right switches between three layouts, as on the Mac.
 
 - **Raw** shows the Markdown source with syntax highlighting.
-- **Formatted** shows the document formatted, and you edit it directly: type, press Return to continue a list (Return on an empty item ends it), Tab and Shift-Tab to indent and outdent list items, and type `# `, `- `, `1. `, `[ ] ` or `> ` at the start of a line to turn it into a heading, list, task or quote. Tap a checkbox to tick a task, a wiki link to read the sheet it names, and a small footnote number to jump to its note; tap the number at the start of the note to come back. With the cursor in a web link, the edit menu has **Open Link**. Copying puts Markdown on the clipboard, and pasting Markdown formats it.
+- **Formatted** shows the document formatted, and you edit it directly: type, press Return to continue a list (Return on an empty item ends it), Tab and Shift-Tab to indent and outdent list items, and type `# `, `- `, `1. `, `[ ] ` or `> ` at the start of a line to turn it into a heading, list, task or quote. Tap a checkbox to tick a task, a wiki link to open the sheet it names, and a small footnote number to jump to its note; tap the number at the start of the note to come back. With the cursor in a web link, the edit menu has **Open Link**. Copying puts Markdown on the clipboard, and pasting Markdown formats it.
 - **Dual** shows both side by side, and you can type in either. The panes scroll together: scroll either one and the other follows, block by block, and both reach the end of the document at the same time. Dual needs a wide window; in a narrow one Raw shows on its own.
 
-Switching layouts keeps your place. Tables show as a grid in the formatted view but can't be typed into there: edit them in Raw.
+Switching layouts keeps your place.
+
+### Tables
+
+In the formatted view, tap a table to open the **table editor**: a grid of cells to type in. The menu above each column sets its alignment and inserts, moves or deletes columns; the number beside each row does the same for rows. Return moves to the next cell, and past the last cell adds a row. **Done** puts the table back in the document, with its columns lined up in the Markdown; **Undo** takes the change back. The toolbar's table button opens the editor on a new table, or on the table at the cursor. In Raw, tables are edited as Markdown.
+
+### Folding sections
+
+In the formatted view, put the cursor on a heading and tap the fold button at the end of the toolbar (or press **⌥⌘←**) to collapse everything under it, up to the next heading of the same or a higher level; do it again to expand. **⌥⇧⌘→** unfolds all. Moving the cursor into a folded section opens it. Folding never changes the file.
 
 ### The toolbar
 
-The strip above the editors works on whichever pane has the cursor. In the formatted view it formats the text and lights up what's on at the cursor; a link asks for its address, a wiki link for the sheet's name. In Raw it inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. iPadOS requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so allowing a top-level folder once covers all your documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
+The strip above the editors works on whichever pane has the cursor. In the formatted view it formats the text and lights up what's on at the cursor; a link asks for its address, a wiki link for the sheet's name. In Raw it inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. In the formatted view it also has outdent, indent and fold. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. iPadOS requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so the library folder you chose already covers the documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
 
 ### The More menu
 
 - **Typewriter Scrolling** keeps the line you are typing in the middle of the screen.
 - **Focus** dims everything except the current **Paragraph** or **Sentence**, in either view. In Dual it follows the cursor.
-- **Export Preview…** shows the document in the export styles (section 10). From there, or straight from the menu, share it as HTML, PDF or RTF, or print it. Images saved beside the document are embedded.
-- **Markwright Help**, the **Markdown Cheat Sheet** and **Settings…**, which has the same themes, fonts and colors as the Mac.
+- **Composition Mode** hides the toolbars, the sidebar, the dashboard and the status bar, and narrows the text column, so only your writing is left. Tap **Exit Composition** at the top right, or press Escape, to come back.
+- **Save a Version** keeps a copy of the text as it is now. **Revert To** lists **Last Opened** (the text when you opened the sheet) and every saved version by date; reverting keeps what you leave as a version too. Markwright also saves a version every few minutes while you work, up to fifty per sheet. Versions are kept on this iPad, separately from the Mac's.
+- **Export Preview…** shows the document in the export styles (section 10). From there, or straight from the menu, share it as HTML, PDF, Word or RTF, or print it. Images saved beside the document are embedded. A Word document has Word's own heading, list and table formatting, the pictures, links and footnotes; pictures on the web are fetched first.
+- **Quick Open…**, **Markwright Help**, the **Markdown Cheat Sheet** and **Settings…**, which has the same themes, fonts and colors as the Mac.
 
-The **Dashboard** button opens the outline, statistics, writing goal, tags and links of section 7. Tap a heading to jump to it, or a wiki link to read the sheet it names, with a button to open that sheet from Files.
+The **Dashboard** button opens the outline, statistics, writing goal, tags and links of section 7. Tap a heading to jump to it, or a wiki link to open the sheet it names.
 
-### What's only on the Mac
+### Keyboard shortcuts
 
-Editing table cells in the formatted view, composition mode, the library sidebar and Quick Open, versions, Word export, folding and the keyboard shortcuts are Mac features for now.
+With a keyboard attached, the menu bar (hold **⌘**, or move the pointer to the top of the screen) lists every command. The shortcuts are the Mac's (section 11): **⌘B**, **⌘I**, **⌘K** and the other formatting keys, **⌘0** to **⌘6** for paragraph styles, **⌘N** for a new sheet, **⌘⇧O** for Quick Open, **⌥⌘S** to save a version, **⌘⇧E** for the export preview, **⌘P** to print, **⌥⌘C** for composition mode, **⌥⌘L** and **⌥⌘D** for the library and dashboard, and **⌘F** to find in the document.
 
 ---
 

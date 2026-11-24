@@ -2,8 +2,9 @@
 //  Exporter.swift
 //  Markwright
 //
-//  Export to HTML, PDF, Word and RTF, and printing, all driven from the HTML
-//  rendering of the document.
+//  Export to HTML, PDF and RTF, and printing, driven from the HTML rendering of the document.
+//  Word is written by DocxWriter (shared with the iPad): AppKit's own Word writer drops links
+//  and pictures.
 //
 
 import AppKit
@@ -70,17 +71,21 @@ enum Exporter {
             documentAttributes: nil)
     }
 
-    static func exportWord(_ document: Document, style styleOverride: ExportStyle? = nil) {
-        let style = styleOverride ?? defaultStyle
+    /// A Word document with Word's own heading, list and table styles (the export styles are for
+    /// HTML, PDF and RTF), its pictures, links and footnotes.
+    static func exportWord(_ document: Document) {
         let type = UTType("org.openxmlformats.wordprocessingml.document") ?? .data
         guard let url = savePanel(for: document, type: type, extension: "docx") else { return }
-        do {
-            let text = try attributedString(for: document, style: style)
-            let data = try text.data(from: NSRange(location: 0, length: text.length),
-                                     documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML])
-            try data.write(to: url)
-        } catch {
-            report(error)
+        let markdown = document.text
+        let title = document.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
+        let folder = document.fileURL?.deletingLastPathComponent()
+        Task {
+            let data = await DocxWriter.document(markdown: markdown, title: title, documentFolder: folder)
+            do {
+                try data.write(to: url)
+            } catch {
+                report(error)
+            }
         }
     }
 

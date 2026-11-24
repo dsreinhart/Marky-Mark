@@ -76,6 +76,14 @@ struct PadFormattingToolbar: View {
 
                 tool("minus", "Horizontal rule") { controller.addRule() }
                 tool("tablecells", "Table") { controller.addTable() }
+                if controller.formattedIsActive {
+                    separator
+                    tool("decrease.indent", "Outdent") { controller.indent(forward: false) }
+                    tool("increase.indent", "Indent") { controller.indent(forward: true) }
+                    tool(state?.folded == true ? "chevron.right.square" : "chevron.down.square",
+                         state?.folded == true ? "Unfold section" : "Fold section",
+                         on: state?.folded == true) { controller.toggleFold() }
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

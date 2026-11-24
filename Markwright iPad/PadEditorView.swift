@@ -27,6 +27,7 @@ struct PadEditorView: UIViewRepresentable {
         let textView = PadTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
         textView.layoutManager.delegate = context.coordinator
+        textView.isFindInteractionEnabled = true
         textView.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = textColor
         textView.autocorrectionType = .yes
@@ -297,6 +298,8 @@ final class PadEditorController {
     var formatState = FormatState()
     /// A link, wiki link or image address being asked for (formatted editor).
     var prompt: PadLinkPrompt? = nil
+    /// A table open in the table editor (formatted editor).
+    var tableEdit: PadTableEdit? = nil
 
     var isDual: Bool { showsRaw && showsFormatted }
 
@@ -550,12 +553,12 @@ final class PadEditorController {
     }
 
     /// Selects the next occurrence of `needle` after the cursor (wrapping) and scrolls to it.
-    func jump(toText needle: String) {
+    func jump(toText needle: String, options: NSString.CompareOptions = [], fromStart: Bool = false) {
         guard let textView, !needle.isEmpty else { return }
         let ns = textView.text as NSString
-        let start = min(NSMaxRange(textView.selectedRange), ns.length)
-        var found = ns.range(of: needle, options: [], range: NSRange(location: start, length: ns.length - start))
-        if found.location == NSNotFound { found = ns.range(of: needle) }
+        let start = fromStart ? 0 : min(NSMaxRange(textView.selectedRange), ns.length)
+        var found = ns.range(of: needle, options: options, range: NSRange(location: start, length: ns.length - start))
+        if found.location == NSNotFound { found = ns.range(of: needle, options: options) }
         guard found.location != NSNotFound else { return }
         textView.selectedRange = found
         textView.scrollRangeToVisible(found)

@@ -12,8 +12,15 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 struct PadDocumentView: View {
-    @Binding var document: MarkdownFileDocument
-    let fileURL: URL?
+    @Bindable var document: Document
+    @Binding var isComposing: Bool
+    /// Shows another file in this window (a wiki link).
+    let onOpenFile: (URL) -> Void
+    let onQuickOpen: () -> Void
+    /// The library column is hidden: the window shows a button to bring it back.
+    var libraryHidden = false
+    var onShowLibrary: () -> Void = {}
+    private var fileURL: URL? { document.fileURL }
 
     /// Raw, Dual and Formatted, as on the Mac. The stored names are the ones from before the
     /// formatted view could be edited (Editor, Split, Preview), so a saved choice carries over.
@@ -45,13 +52,21 @@ struct PadDocumentView: View {
     /// Name of a folder just allowed that doesn't hold this document.
     @State private var wrongFolder: String? = nil
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var linkedSheet: LinkedSheet? = nil
-    @Environment(\.dismiss) private var dismissDocument
+    @Environment(\.scenePhase) private var scenePhase
+    /// The other text when this file changed elsewhere while being edited here.
+    @State private var conflictText: String? = nil
+    /// A `[[wiki link]]` to a sheet that doesn't exist yet.
+    @State private var missingLink: String? = nil
     private var theme = ThemeSettings.shared
 
-    init(document: Binding<MarkdownFileDocument>, fileURL: URL?) {
-        _document = document
-        self.fileURL = fileURL
+    init(document: Document, isComposing: Binding<Bool>, onOpenFile: @escaping (URL) -> Void, onQuickOpen: @escaping () -> Void,
+         libraryHidden: Bool = false, onShowLibrary: @escaping () -> Void = {}) {
+        self.document = document
+        _isComposing = isComposing
+        self.onOpenFile = onOpenFile
+        self.onQuickOpen = onQuickOpen
+        self.libraryHidden = libraryHidden
+        self.onShowLibrary = onShowLibrary
     }
 
     private var layout: Layout {
@@ -69,16 +84,36 @@ struct PadDocumentView: View {
         fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled"
     }
 
-    private var goalKey: String {
-        fileURL?.standardizedFileURL.path ?? "untitled"
+    private var goalKey: String { document.goalKey }
+
+    /// The text column's width: composition mode narrows an unlimited column.
+    private var columnWidth: CGFloat {
+        isComposing && theme.editorMaxWidth == 0 ? 720 : CGFloat(theme.editorMaxWidth)
     }
 
     var body: some View {
+        NavigationStack {
+            presentingSheets(handlingImages(withAlerts(windowContent)))
+        }
+        // Outside the navigation stack, so the window keeps its title and sidebar button.
+        .inspector(isPresented: Binding(get: { showDashboard && !isComposing }, set: { showDashboard = $0 })) {
+            DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
+                          onJumpToHeading: { controller.goToHeading($0) },
+                          onOpenWikiLink: { target in openWikiLink(target) },
+                          onJumpToTag: { tag in controller.goToText("#" + tag) })
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+        }
+    }
+
+    /// The toolbar strip, the editors and the status bar, with the window's title and toolbar.
+    private var windowContent: some View {
         VStack(spacing: 0) {
-            PadFormattingToolbar(controller: controller,
-                                 onPickPhoto: { showPhotoPicker = true },
-                                 onPickFile: { showFilePicker = true })
-            Divider()
+            if !isComposing {
+                PadFormattingToolbar(controller: controller,
+                                     onPickPhoto: { showPhotoPicker = true },
+                                     onPickFile: { showFilePicker = true })
+                Divider()
+            }
             HStack(spacing: 0) {
                 if effectiveLayout != .preview {
                     editor
@@ -90,22 +125,61 @@ struct PadDocumentView: View {
                     formatted
                 }
             }
-            Divider()
-            statusBar
+            if !isComposing {
+                Divider()
+                statusBar
+            }
         }
+        .overlay(alignment: .topTrailing) {
+            if isComposing {
+                Button {
+                    isComposing = false
+                } label: {
+                    Label("Exit Composition", systemImage: "arrow.down.right.and.arrow.up.left")
+                        .font(.callout)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.escape, modifiers: [])
+                .padding(12)
+            }
+        }
+        .navigationTitle(Binding(get: { title }, set: { rename(to: $0) }))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu {
+            RenameButton()
+        }
+        .toolbar(isComposing ? .hidden : .visible, for: .navigationBar)
+        .statusBarHidden(isComposing)
+        .persistentSystemOverlays(isComposing ? .hidden : .automatic)
+        .onChange(of: document.text) { _, _ in document.textDidChange() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { document.checkForExternalChange() } else { document.autosaveNow() }
+        }
+        .task(id: document.id) { await watchForExternalChanges() }
+        .task(id: document.pendingJump?.id) { await performPendingJump() }
+        .focusedSceneValue(\.padDocument, PadDocumentActions(
+            controller: controller,
+            saveVersion: { document.saveVersion() },
+            exportPreview: { showExportPreview = true },
+            print: { printDocument() },
+            toggleComposition: { isComposing.toggle() },
+            toggleDashboard: { showDashboard.toggle() },
+            toggleTypewriter: { typewriter.toggle() },
+            showHelp: { showHelp = true },
+            showSettings: { showSettings = true },
+            save: { document.autosaveNow() }
+        ))
         .onChange(of: effectiveLayout, initial: true) { _, layout in
             controller.setPanes(raw: layout != .preview, formatted: layout != .editor)
         }
         .onAppear {
-            controller.openWikiLink = { target in Task { await openWikiLink(target) } }
+            document.onExternalConflict = { _, other in conflictText = other }
+            controller.openWikiLink = { target in openWikiLink(target) }
             controller.pasteImage = { data, type in insertImage(data: data, name: "pasted", type: type) }
-        }
-        .inspector(isPresented: $showDashboard) {
-            DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
-                          onJumpToHeading: { controller.goToHeading($0) },
-                          onOpenWikiLink: { target in Task { await openWikiLink(target) } },
-                          onJumpToTag: { tag in controller.goToText("#" + tag) })
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
         }
         .toolbar { toolbarContent }
         .onChange(of: fileURL, initial: true) { _, url in
@@ -115,30 +189,63 @@ struct PadDocumentView: View {
             // After a rename (here or in Files), bring its pictures into "<New name>-images".
             if let moved = PadImageStore.adoptPictures(text: document.text, documentURL: url) {
                 document.text = moved
+                document.textDidChange()
             }
         }
         .environment(\.openURL, OpenURLAction { url in
             guard let target = WikiLink.target(from: url) else { return .systemAction }
-            Task { await openWikiLink(target) }
+            openWikiLink(target)
             return .handled
         })
-        .sheet(isPresented: $showSettings) {
-            NavigationStack {
-                SettingsView()
-                    .navigationTitle("Settings")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showSettings = false }
-                        }
-                    }
+    }
+
+    private func withAlerts(_ content: some View) -> some View {
+        content
+        .alert("Changed on Another Device", isPresented: Binding(get: { conflictText != nil }, set: { if !$0 { conflictText = nil } })) {
+            Button("Keep This Version") {
+                conflictText = nil
+                document.autosaveNow()
+            }
+            Button("Use Other Version") {
+                if let other = conflictText { document.useOtherVersion(other) }
+                conflictText = nil
+            }
+        } message: {
+            Text("Another device or app saved a different version of \u{201C}\(title)\u{201D} while you were editing it. The version you don\u{2019}t choose stays in More \u{203A} Revert To.")
+        }
+        .alert("No Sheet Named \u{201C}\(missingLink ?? "")\u{201D}", isPresented: Binding(get: { missingLink != nil }, set: { if !$0 { missingLink = nil } })) {
+            Button("Create Sheet") {
+                if let target = missingLink { createLinkedSheet(target) }
+                missingLink = nil
+            }
+            Button("Cancel", role: .cancel) { missingLink = nil }
+        } message: {
+            Text("Create it in \u{201C}\(linkFolder?.lastPathComponent ?? "this folder")\u{201D}?")
+        }
+        .alert(controller.prompt?.title ?? "", isPresented: Binding(get: { controller.prompt != nil }, set: { shown in
+            if !shown { DispatchQueue.main.async { controller.prompt = nil } }
+        }), presenting: controller.prompt) { prompt in
+            promptFields(prompt)
+        } message: { prompt in
+            switch prompt.kind {
+            case .wikiLink: Text("The name of a sheet in this document's folder.")
+            case .image: Text("The address of a picture on the web.")
+            case .link: EmptyView()
             }
         }
-        .sheet(isPresented: $showCheatSheet) { MarkdownCheatSheet() }
-        .sheet(isPresented: $showHelp) { PadHelpView() }
-        .sheet(isPresented: $showExportPreview) { PadExportPreviewView(markdown: document.text, title: title, documentURL: fileURL) }
-        .sheet(item: $shareFile) { file in ActivityView(items: [file.url]) }
-        .sheet(item: $linkedSheet) { sheet in LinkedSheetView(sheet: sheet) }
+        .onChange(of: controller.prompt?.id) {
+            promptAddress = controller.prompt?.address ?? ""
+            promptLabel = ""
+        }
+        .alert(errorTitle, isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func handlingImages(_ content: some View) -> some View {
+        content
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
@@ -176,25 +283,30 @@ struct PadDocumentView: View {
                 finishPendingImage(pickedFolder: folder)
             }
         }
-        .alert(controller.prompt?.title ?? "", isPresented: Binding(get: { controller.prompt != nil }, set: { shown in
-            if !shown { DispatchQueue.main.async { controller.prompt = nil } }
-        }), presenting: controller.prompt) { prompt in
-            promptFields(prompt)
-        } message: { prompt in
-            switch prompt.kind {
-            case .wikiLink: Text("The name of a sheet in this document's folder.")
-            case .image: Text("The address of a picture on the web.")
-            case .link: EmptyView()
+    }
+
+    private func presentingSheets(_ content: some View) -> some View {
+        content
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                SettingsView()
+                    .navigationTitle("Settings")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showSettings = false }
+                        }
+                    }
             }
         }
-        .onChange(of: controller.prompt?.id) {
-            promptAddress = controller.prompt?.address ?? ""
-            promptLabel = ""
-        }
-        .alert(errorTitle, isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
+        .sheet(isPresented: $showCheatSheet) { MarkdownCheatSheet() }
+        .sheet(isPresented: $showHelp) { PadHelpView() }
+        .sheet(isPresented: $showExportPreview) { PadExportPreviewView(markdown: document.text, title: title, documentURL: fileURL) }
+        .sheet(item: $shareFile) { file in ActivityView(items: [file.url]) }
+        .sheet(item: Binding(get: { controller.tableEdit }, set: { controller.tableEdit = $0 })) { edit in
+            PadTableEditorView(edit: edit,
+                               onDone: { controller.finishTableEdit(edit, table: $0) },
+                               onDelete: { controller.deleteTable(edit) })
         }
     }
 
@@ -206,7 +318,7 @@ struct PadDocumentView: View {
             fontSize: CGFloat(theme.bodyFontSize),
             textColor: theme.useCustomEditorColors ? UIColor(theme.editorTextColor) : .label,
             background: theme.useCustomEditorColors ? UIColor(theme.editorBackground) : nil,
-            maxWidth: CGFloat(theme.editorMaxWidth),
+            maxWidth: columnWidth,
             typewriter: typewriter,
             // In Dual, Focus follows the cursor, which is only in one pane.
             focus: controller.isDual && controller.activePane != .raw ? .off : focusMode,
@@ -218,13 +330,19 @@ struct PadDocumentView: View {
     private var formatted: some View {
         PadRichEditorView(
             text: $document.text,
-            style: EditorStyle(theme: theme),
+            style: formattedStyle,
             baseURL: fileURL,
             typewriter: typewriter,
             focus: focusMode,
             controller: controller,
             sync: controller.dualSync
         )
+    }
+
+    private var formattedStyle: EditorStyle {
+        var style = EditorStyle(theme: theme)
+        style.maxWidth = columnWidth
+        return style
     }
 
     /// The fields and buttons of the formatted editor's link prompt.
@@ -258,6 +376,13 @@ struct PadDocumentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        if libraryHidden {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onShowLibrary) {
+                    Label("Library", systemImage: "sidebar.left")
+                }
+            }
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Picker("Layout", selection: Binding(get: { layoutRaw }, set: { value in
                 controller.layoutWillChange()
@@ -270,6 +395,7 @@ struct PadDocumentView: View {
                 Label("Formatted", systemImage: "doc.richtext").tag(Layout.preview.rawValue)
             }
             .pickerStyle(.segmented)
+            .fixedSize()
 
             Button {
                 showDashboard.toggle()
@@ -283,19 +409,27 @@ struct PadDocumentView: View {
                     ForEach(FocusMode.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .pickerStyle(.menu)
+                Button("Composition Mode", systemImage: "arrow.up.left.and.arrow.down.right") { isComposing = true }
+                Divider()
+                Button("Save a Version", systemImage: "clock.badge.checkmark") { document.saveVersion() }
+                Menu("Revert To", systemImage: "clock.arrow.circlepath") {
+                    Button("Last Opened") { document.revertToOpened() }
+                    if !document.versions.isEmpty {
+                        Divider()
+                        ForEach(document.versions) { version in
+                            Button(version.label) { document.revert(to: version) }
+                        }
+                    }
+                }
                 Divider()
                 Button("Export Preview…", systemImage: "doc.text.magnifyingglass") { showExportPreview = true }
                 Button("Share HTML…", systemImage: "square.and.arrow.up") { share { try PadExporter.htmlFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
                 Button("Share PDF…", systemImage: "square.and.arrow.up") { shareLater { try await PadExporter.pdfFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
+                Button("Share Word…", systemImage: "square.and.arrow.up") { shareLater { try await PadExporter.wordFile(markdown: document.text, title: title, documentURL: fileURL) } }
                 Button("Share RTF…", systemImage: "square.and.arrow.up") { share { try PadExporter.rtfFile(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL) } }
-                Button("Print…", systemImage: "printer") {
-                    Task {
-                        do { try await PadExporter.print(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL, from: PadExporter.keyWindowView) }
-                        catch { showError("Print Failed", error.localizedDescription) }
-                    }
-                }
+                Button("Print…", systemImage: "printer") { printDocument() }
                 Divider()
-                Button("Recent Files…", systemImage: "clock") { dismissDocument() }
+                Button("Quick Open…", systemImage: "magnifyingglass") { onQuickOpen() }
                 Button("Markwright Help", systemImage: "questionmark.circle") { showHelp = true }
                 Button("Markdown Cheat Sheet", systemImage: "list.bullet.rectangle") { showCheatSheet = true }
                 Button("Settings…", systemImage: "gearshape") { showSettings = true }
@@ -349,32 +483,74 @@ struct PadDocumentView: View {
 
     // MARK: - Wiki links
 
-    /// Shows `[[target]]` from the document's folder, creating the file when missing. iPadOS has no
-    /// way to open another document in this window, so it appears as a sheet with an Open in Files button.
-    private func openWikiLink(_ target: String) async {
-        guard let folder = fileURL?.deletingLastPathComponent() else {
-            showError("Link Not Opened", "Save this document first so links can be resolved next to it.")
-            return
+    /// Shows `[[target]]` in this window: a sheet in the library, or beside this document.
+    private func openWikiLink(_ target: String) {
+        if let url = WikiLinkResolver.resolve(target, near: fileURL) {
+            onOpenFile(url)
+        } else if linkFolder == nil {
+            showError("Link Not Opened", "Choose a library folder first, then the link can create the sheet.")
+        } else {
+            missingLink = target
         }
-        PadFolderAccess.begin(folder)
-        let candidates = ["md", "markdown", "txt"].map { folder.appending(path: target + "." + $0) }
-        var url = candidates.first { FileManager.default.fileExists(atPath: $0.path) }
-        if url == nil {
-            let created = folder.appending(path: target.replacingOccurrences(of: "/", with: "-") + ".md")
-            do {
-                try ("# " + target + "\n\n").write(to: created, atomically: true, encoding: .utf8)
-                url = created
-            } catch {
-                showError("Link Not Opened", "No sheet named \u{201C}\(target)\u{201D} here, and the folder isn't writable. Open the folder once via the image button's prompt, or create the sheet in Files.")
-                return
-            }
-        }
-        guard let url else { return }
-        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        linkedSheet = LinkedSheet(url: url, text: text)
     }
 
-    // MARK: - Images
+    /// Where a link to a missing sheet creates it: the library, else this document's folder.
+    private var linkFolder: URL? {
+        LibraryModel.shared.folderURL ?? fileURL?.deletingLastPathComponent()
+    }
+
+    private func createLinkedSheet(_ target: String) {
+        guard let folder = linkFolder else { return }
+        PadFolderAccess.begin(folder)
+        let safeName = target.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let url = folder.appending(path: safeName + ".md")
+        do {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try TextFileIO.write(Data(("# " + target + "\n\n").utf8), to: url)
+            }
+            LibraryModel.shared.scheduleRefresh()
+            onOpenFile(url)
+        } catch {
+            showError("Sheet Not Created", "\u{201C}\(folder.lastPathComponent)\u{201D} isn't writable: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - File
+
+    private func rename(to name: String) {
+        do {
+            _ = try PadDocuments.shared.rename(document, to: name)
+        } catch {
+            showError("Not Renamed", error.localizedDescription)
+        }
+    }
+
+    /// Changes from another device can arrive while the app stays in front.
+    private func watchForExternalChanges() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(5))
+            if UIApplication.shared.applicationState == .active { document.checkForExternalChange() }
+        }
+    }
+
+    /// Carries out a library search jump once the editor exists.
+    private func performPendingJump() async {
+        guard let request = document.pendingJump else { return }
+        for _ in 0..<20 where controller.textView == nil && controller.rich?.textView == nil {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        controller.goToText(request.text, options: [.caseInsensitive, .diacriticInsensitive], fromStart: true)
+        document.pendingJump = nil
+    }
+
+    private func printDocument() {
+        Task {
+            do { try await PadExporter.print(markdown: document.text, title: title, style: PadExporter.defaultStyle, documentURL: fileURL, from: PadExporter.keyWindowView) }
+            catch { showError("Print Failed", error.localizedDescription) }
+        }
+    }
+
     // MARK: - Images
 
     private func insertPickedPhoto(_ item: PhotosPickerItem) async {
@@ -486,32 +662,16 @@ struct PadHelpView: View {
     }
 }
 
-/// A sheet reached through a wiki link: preview plus a way into Files, where tapping opens it for editing.
-struct LinkedSheet: Identifiable {
-    let url: URL
-    let text: String
-    var id: String { url.path }
-}
-
-struct LinkedSheetView: View {
-    let sheet: LinkedSheet
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            MarkdownPreview(markdown: sheet.text, baseURL: sheet.url)
-                .navigationTitle(sheet.url.deletingPathExtension().lastPathComponent)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Open in Files", systemImage: "folder") {
-                            if let files = URL(string: "shareddocuments://" + sheet.url.path) {
-                                UIApplication.shared.open(files)
-                            }
-                        }
-                    }
-                }
-        }
-    }
+/// What the menu bar and keyboard shortcuts can do in the focused window's sheet.
+struct PadDocumentActions {
+    let controller: PadEditorController
+    let saveVersion: () -> Void
+    let exportPreview: () -> Void
+    let print: () -> Void
+    let toggleComposition: () -> Void
+    let toggleDashboard: () -> Void
+    let toggleTypewriter: () -> Void
+    let showHelp: () -> Void
+    let showSettings: () -> Void
+    let save: () -> Void
 }

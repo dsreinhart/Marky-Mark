@@ -55,6 +55,10 @@ class MarkwrightTextView: NSTextView {
     var revealHandler: ((NSTextView, NSRange) -> Void)? = nil
     /// Called when this view takes the keyboard.
     var onTakeFocus: ((NSTextView) -> Void)? = nil
+    /// Called (once per run-loop turn) after the text column's width changes.
+    var onColumnWidthChange: (() -> Void)? = nil
+    private var lastColumnWidth: CGFloat = 0
+    private var columnChangePending = false
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -193,6 +197,17 @@ class MarkwrightTextView: NSTextView {
         }
         if inset != textContainerInset {
             textContainerInset = inset
+        }
+        let column = bounds.width - 2 * textContainerInset.width
+        if onColumnWidthChange != nil, abs(column - lastColumnWidth) >= 1 {
+            lastColumnWidth = column
+            if !columnChangePending {
+                columnChangePending = true
+                DispatchQueue.main.async { [weak self] in
+                    self?.columnChangePending = false
+                    self?.onColumnWidthChange?()
+                }
+            }
         }
     }
 }

@@ -3,6 +3,7 @@
 //  Markwright
 //
 //  One open document: its text, file, auto-save, untitled draft and version history.
+//  Shared by the Mac and the iPad.
 //
 
 import SwiftUI
@@ -89,7 +90,7 @@ final class Document: Identifiable {
         let oldKey = goalKey
         if let old = fileURL { Self.moveVersions(from: old, to: url) }
         fileURL = url
-        bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        bookmarkData = FileBookmark.make(url)
         GoalStore.shared.rename(from: oldKey, to: goalKey)
         reloadVersions()
         onFileChange?()
@@ -100,8 +101,14 @@ final class Document: Identifiable {
 
     /// Opens a file chosen by the user (open panel, Finder, drag).
     static func open(url: URL) throws -> Document {
-        let (content, format) = try TextFileFormat.read(from: url)
-        let bookmark = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        let (content, format) = try TextFileIO.read(url)
+        return opened(url: url, content: content, format: format)
+    }
+
+    /// A document for a file already read (on the iPad off the main thread, since the read may
+    /// have to wait for iCloud to download it).
+    static func opened(url: URL, content: String, format: TextFileFormat) -> Document {
+        let bookmark = FileBookmark.make(url)
         let document = Document(text: content, fileURL: url, bookmarkData: bookmark)
         document.fileFormat = format
         document.lastSeenFileDate = Self.fileDate(of: url)
@@ -113,14 +120,13 @@ final class Document: Identifiable {
     static func restore(bookmark: Data) -> Document? {
         do {
             var isStale = false
-            let url = try URL(resolvingBookmarkData: bookmark, options: .withSecurityScope,
-                              relativeTo: nil, bookmarkDataIsStale: &isStale)
+            let url = try FileBookmark.resolve(bookmark, isStale: &isStale)
             if url.path.contains("/.Trash/") || !FileManager.default.fileExists(atPath: url.path) { return nil }
             guard url.startAccessingSecurityScopedResource() else { return nil }
             defer { url.stopAccessingSecurityScopedResource() }
-            let (content, format) = try TextFileFormat.read(from: url)
+            let (content, format) = try TextFileIO.read(url)
             var data = bookmark
-            if isStale, let fresh = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            if isStale, let fresh = FileBookmark.make(url) {
                 data = fresh
             }
             let document = Document(text: content, fileURL: url, bookmarkData: data)
@@ -166,11 +172,16 @@ final class Document: Identifiable {
         guard let bookmarkData else { return false }
         do {
             var isStale = false
-            let url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope,
-                              relativeTo: nil, bookmarkDataIsStale: &isStale)
+            let url = try FileBookmark.resolve(bookmarkData, isStale: &isStale)
+            #if os(macOS)
             guard url.startAccessingSecurityScopedResource() else { return false }
             defer { url.stopAccessingSecurityScopedResource() }
-            if isStale, let fresh = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            #else
+            // A sheet inside the library folder is reached through the folder's access.
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            #endif
+            if isStale, let fresh = FileBookmark.make(url) {
                 self.bookmarkData = fresh
             }
             // The bookmark follows a file renamed behind our back; its history and goal go with it.
@@ -184,11 +195,11 @@ final class Document: Identifiable {
             snapshotBeforeOverwrite()
             // Never overwrite what another device or app wrote without keeping it first.
             var overwritten: String? = nil
-            if let onDisk = try? TextFileFormat.read(from: url).text, onDisk != lastSavedText, onDisk != text {
+            if let onDisk = try? TextFileIO.read(url).text, onDisk != lastSavedText, onDisk != text {
                 snapshot(onDisk)
                 if onDisk != reportedOtherText { overwritten = onDisk }
             }
-            try fileFormat.encode(text).write(to: url, options: .atomic)
+            try TextFileIO.write(fileFormat.encode(text), to: url)
             lastSavedText = text
             fileURL = url
             hasUnsavedChanges = false
@@ -210,7 +221,7 @@ final class Document: Identifiable {
         if fileURL == nil { openedText = text }   // a new file's baseline is what was first saved
         fileURL = url
         GoalStore.shared.rename(from: oldKey, to: goalKey)
-        bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        bookmarkData = FileBookmark.make(url)
         lastSavedText = text
         hasUnsavedChanges = false
         removeDraft()
@@ -240,7 +251,7 @@ final class Document: Identifiable {
         var url = fileURL
         var stale = false
         if let bookmarkData,
-           let resolved = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
+           let resolved = try? FileBookmark.resolve(bookmarkData, isStale: &stale) {
             url = resolved
         }
         let accessing = url.startAccessingSecurityScopedResource()
@@ -248,7 +259,7 @@ final class Document: Identifiable {
 
         let date = Self.fileDate(of: url)
         guard date != lastSeenFileDate else { return .none }
-        guard let (onDisk, format) = try? TextFileFormat.read(from: url) else { return .none }
+        guard let (onDisk, format) = try? TextFileIO.read(url) else { return .none }
         lastSeenFileDate = date
         if onDisk == lastSavedText || onDisk == reportedOtherText { return .none }
         if onDisk == text {
@@ -281,7 +292,7 @@ final class Document: Identifiable {
     // MARK: - Untitled drafts
 
     static var draftsFolder: URL {
-        let folder = DocumentStore.supportFolder.appending(path: "Drafts", directoryHint: .isDirectory)
+        let folder = SupportFolder.url.appending(path: "Drafts", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }
@@ -313,7 +324,7 @@ final class Document: Identifiable {
     private static func versionsFolder(for url: URL) -> URL {
         let digest = SHA256.hash(data: Data(stablePath(url).utf8))
         let key = digest.map { String(format: "%02x", $0) }.joined().prefix(24)
-        return DocumentStore.supportFolder
+        return SupportFolder.url
             .appending(path: "Versions", directoryHint: .isDirectory)
             .appending(path: String(key), directoryHint: .isDirectory)
     }

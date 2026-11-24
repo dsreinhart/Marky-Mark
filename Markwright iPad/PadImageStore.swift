@@ -2,106 +2,29 @@
 //  PadImageStore.swift
 //  Markwright iPad
 //
-//  Turns a picked image into something Markdown can reference: a file beside the
-//  document when that folder is writable, otherwise an embedded data URL.
+//  Saving a picked picture is shared with the Mac (PictureStore); this keeps a renamed
+//  document's pictures with it.
 //
 
-import UIKit
+import Foundation
 import UniformTypeIdentifiers
 
 @MainActor
 enum PadImageStore {
 
-    struct Stored {
-        let source: String
-        let alt: String
-        let embedded: Bool
-    }
-
-    private static let maxPixelSize: CGFloat = 1600
-
-    /// Image bytes prepared for storage: downscaled photo as JPEG, small PNGs kept.
-    struct Prepared {
-        let data: Data
-        let ext: String
-        let alt: String
-        let fileName: String
-    }
+    typealias Stored = PictureStore.Stored
+    typealias Prepared = PictureStore.Prepared
 
     static func prepare(data: Data, suggestedName: String?, type: UTType?) -> Prepared? {
-        guard let image = UIImage(data: data) else { return nil }
-        let baseName = (suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "")
-            .trimmingCharacters(in: .whitespaces)
-        let alt = baseName.isEmpty ? "Image" : baseName
-
-        let isPNG = type?.conforms(to: .png) == true
-        let scaled = downscale(image)
-        let payload: Data
-        let ext: String
-        if isPNG, scaled.size == image.size, data.count < 2_000_000 {
-            payload = data
-            ext = "png"
-        } else if let jpeg = scaled.jpegData(compressionQuality: 0.85) {
-            payload = jpeg
-            ext = "jpg"
-        } else {
-            payload = data
-            ext = type?.preferredFilenameExtension ?? "img"
-        }
-        let stamp = Self.formatter.string(from: Date())
-        let fileName = (baseName.isEmpty || ImageFolderLinks.safeName(baseName).isEmpty ? "image" : ImageFolderLinks.safeName(baseName)) + "-" + stamp + "." + ext
-        return Prepared(data: payload, ext: ext, alt: alt, fileName: fileName)
+        PictureStore.prepare(data: data, suggestedName: suggestedName, type: type)
     }
 
-    /// Saves the image beside the document. Throws when the folder isn't writable.
-    /// `text` is the document's Markdown, so a document that already links into a picture folder keeps using it.
     static func storeBeside(_ prepared: Prepared, documentURL: URL, text: String) throws -> Stored {
-        let hasGrant = PadFolderAccess.begin(documentURL.deletingLastPathComponent())
-        do {
-            let relative = try writeBeside(documentURL, folderName: pictureFolder(for: documentURL, text: text),
-                                           fileName: prepared.fileName, data: prepared.data)
-            PadDiagnostics.log("image saved: \(relative) (folder grant: \(hasGrant))")
-            return Stored(source: relative, alt: prepared.alt, embedded: false)
-        } catch {
-            PadDiagnostics.log("image not saved beside \(documentURL.path) (folder grant: \(hasGrant)): \(error)")
-            throw error
-        }
+        try PictureStore.storeBeside(prepared, documentURL: documentURL, text: text)
     }
 
-    /// "<Document>-images", unless the text already links only into some other picture folder.
-    private static func pictureFolder(for documentURL: URL, text: String) -> String {
-        let own = ImageFolderLinks.folderName(forDocumentNamed: documentURL.deletingPathExtension().lastPathComponent)
-        let linked = ImageFolderLinks.linkedFolders(in: text)
-        return linked.isEmpty || linked.contains(own) ? own : linked[0]
-    }
-
-    /// Embeds the image in the Markdown itself (the editor folds the payload out of view).
     static func embed(_ prepared: Prepared) -> Stored {
-        let mime = prepared.ext == "png" ? "image/png" : "image/jpeg"
-        return Stored(source: "data:\(mime);base64," + prepared.data.base64EncodedString(), alt: prepared.alt, embedded: true)
-    }
-
-    /// Writes into `folderName` next to the document under a name not already used there, and
-    /// returns the relative path. Fails when the folder isn't writable (iCloud Drive and other
-    /// providers only grant the file itself).
-    private static func writeBeside(_ documentURL: URL, folderName: String, fileName: String, data: Data) throws -> String {
-        let folder = documentURL.deletingLastPathComponent().appending(path: folderName, directoryHint: .isDirectory)
-        let name = ImageFolderLinks.uniqueFileName(fileName) {
-            FileManager.default.fileExists(atPath: folder.appending(path: $0).path)
-        }
-        let target = folder.appending(path: name)
-        var writeError: Error?
-        var coordinatorError: NSError?
-        NSFileCoordinator().coordinate(writingItemAt: target, options: .forReplacing, error: &coordinatorError) { url in
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try data.write(to: url, options: .withoutOverwriting)
-            } catch {
-                writeError = error
-            }
-        }
-        if let error = writeError ?? coordinatorError { throw error }
-        return folderName + "/" + name
+        PictureStore.embed(prepared)
     }
 
     // MARK: Keeping pictures with a renamed document
@@ -205,22 +128,4 @@ enum PadImageStore {
         }
         return moved && error == nil
     }
-
-    private static func downscale(_ image: UIImage) -> UIImage {
-        let longest = max(image.size.width, image.size.height)
-        guard longest > maxPixelSize else { return image }
-        let scale = maxPixelSize / longest
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let format = UIGraphicsImageRendererFormat.default()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-    }
-
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd-HHmmss"
-        return f
-    }()
 }

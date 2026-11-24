@@ -27,6 +27,9 @@ struct MarkdownRoundTripTests {
         ("a \\== b", "a \\=\\= b"),
         ("\\[[not a link]] and \\[^x]", "\\[[not a link]] and \\[^x]"),
         ("# Plan #q4", "# Plan #q4"),
+        ("![Chart](chart.png){width=50%} and ![Logo](logo.png)", "![Chart](chart.png){width=50%} and ![Logo](logo.png)"),
+        ("![Logo](logo.png){ width = \"2in\" }", "![Logo](logo.png){width=2in}"),
+        ("![a](a.png){height=3}", "![a](a.png){height=3}"),
     ])
     func survivesRoundTrip(input: String, expected: String) {
         let once = roundTrip(input)

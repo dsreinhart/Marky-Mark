@@ -126,6 +126,7 @@ struct CheatSheetSection: Identifiable {
         CheatSheetSection(title: "Links & Images", items: [
             CheatSheetItem(syntax: "[text](https://url)", description: "Hyperlink", result: "Clickable link with label"),
             CheatSheetItem(syntax: "![alt](https://url)", description: "Image", result: "Embedded image reference"),
+            CheatSheetItem(syntax: "![alt](pic.png){width=50%}", description: "Image size", result: "Half the column; also 2in, 300px"),
         ]),
         CheatSheetSection(title: "Blockquotes", items: [
             CheatSheetItem(syntax: "> Quoted text", description: "Blockquote", result: "Indented quote with accent bar"),

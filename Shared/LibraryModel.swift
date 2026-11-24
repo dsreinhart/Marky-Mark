@@ -2,12 +2,17 @@
 //  LibraryModel.swift
 //  Markwright
 //
-//  A folder of Markdown files shown as sheets and groups in the sidebar.
+//  A folder of Markdown files shown as sheets and groups in the sidebar. Shared by the Mac and
+//  the iPad; choosing the folder is done by each app's own folder window.
 //
 
 import SwiftUI
-import AppKit
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 nonisolated struct LibraryNode: Identifiable, Hashable {
     let url: URL
@@ -68,17 +73,22 @@ final class LibraryModel {
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.bookmarkKey) {
             var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale),
+            if let url = try? FileBookmark.resolve(data, isStale: &stale),
                url.startAccessingSecurityScopedResource() {
                 folderURL = url
-                if stale, let fresh = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                if stale, let fresh = FileBookmark.make(url) {
                     UserDefaults.standard.set(fresh, forKey: Self.bookmarkKey)
                 }
                 refresh()
             }
         }
         // Changes made while the app was in the background (Finder copies, other editors).
-        activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+        #if os(macOS)
+        let didBecomeActive = NSApplication.didBecomeActiveNotification
+        #else
+        let didBecomeActive = UIApplication.didBecomeActiveNotification
+        #endif
+        activationObserver = NotificationCenter.default.addObserver(forName: didBecomeActive,
                                                                     object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.scheduleRefresh() }
         }
@@ -111,20 +121,8 @@ final class LibraryModel {
 
     // MARK: - Folder
 
-    func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.message = "Choose the folder that holds your Markdown library"
-        panel.prompt = "Use as Library"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        setFolder(url)
-    }
-
     func setFolder(_ url: URL) {
-        if let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+        if let data = FileBookmark.make(url) {
             UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
         }
         folderURL?.stopAccessingSecurityScopedResource()
@@ -245,8 +243,18 @@ final class LibraryModel {
         let fm = FileManager.default
         var children: [LibraryNode] = []
         let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey, .nameKey]
-        if depth < 6, let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) {
+        // Hidden files are listed too, for iCloud's placeholders of files not yet on this device.
+        if depth < 6, let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: []) {
             for item in items {
+                if let placeholder = iCloudPlaceholderTarget(item) {
+                    try? fm.startDownloadingUbiquitousItem(at: placeholder)
+                    guard markdownExtensions.contains(placeholder.pathExtension.lowercased()) else { continue }
+                    children.append(LibraryNode(url: placeholder, name: placeholder.deletingPathExtension().lastPathComponent,
+                                                isFolder: false, children: nil, wordCount: 0, keywords: [],
+                                                modified: .distantPast))
+                    continue
+                }
+                if item.lastPathComponent.hasPrefix(".") { continue }
                 let values = try? item.resourceValues(forKeys: Set(keys))
                 let modified = values?.contentModificationDate ?? .distantPast
                 if values?.isDirectory == true {
@@ -270,6 +278,14 @@ final class LibraryModel {
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
         return LibraryNode(url: url, name: url.lastPathComponent, isFolder: true, children: children,
                            wordCount: children.reduce(0) { $0 + $1.wordCount }, keywords: [], modified: modified)
+    }
+
+    /// For iCloud's ".Name.md.icloud" stand-in of a file still in the cloud, the file it stands for.
+    nonisolated static func iCloudPlaceholderTarget(_ item: URL) -> URL? {
+        let name = item.lastPathComponent
+        guard name.hasPrefix("."), name.hasSuffix(".icloud"), name.count > ".x.icloud".count else { return nil }
+        let real = String(name.dropFirst().dropLast(".icloud".count))
+        return item.deletingLastPathComponent().appending(path: real)
     }
 
     /// Watches every directory of the library (a directory only reports changes to its own entries).
@@ -313,7 +329,7 @@ final class LibraryModel {
             counter += 1
         }
         do {
-            try "".write(to: candidate, atomically: true, encoding: .utf8)
+            try TextFileIO.write(Data(), to: candidate)
             scheduleRefresh()
             return candidate
         } catch {
@@ -342,7 +358,7 @@ final class LibraryModel {
             target = target.appendingPathExtension(node.url.pathExtension)
         }
         do {
-            try FileManager.default.moveItem(at: node.url, to: target)
+            try TextFileIO.move(node.url, to: target)
             carryOver(from: node, to: target)
             scheduleRefresh()
             return target
@@ -363,7 +379,11 @@ final class LibraryModel {
     }
 
     func trash(_ node: LibraryNode) {
+        #if os(macOS)
         try? FileManager.default.trashItem(at: node.url, resultingItemURL: nil)
+        #else
+        TextFileIO.delete(node.url)
+        #endif
         scheduleRefresh()
     }
 }

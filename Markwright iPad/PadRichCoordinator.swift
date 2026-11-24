@@ -67,6 +67,10 @@ final class PadRichCoordinator: NSObject {
     private var allowsTableEdge = false
     /// Typing attributes chosen with an empty selection (e.g. Bold before typing); kept until the cursor moves.
     private var typingOverride: (location: Int, attributes: [NSAttributedString.Key: Any])? = nil
+    /// Paragraph start locations of headings whose sections are folded.
+    private var foldedHeadings: Set<Int> = []
+    /// Character ranges currently hidden by folding (paragraph aligned).
+    private(set) var foldedRanges: [NSRange] = []
 
     init(_ parent: PadRichEditorView) {
         self.parent = parent
@@ -82,6 +86,8 @@ final class PadRichCoordinator: NSObject {
 
     func load(_ markdown: String) {
         guard let textView, let storage else { return }
+        foldedHeadings = []
+        applyFolds([])
         isLoading = true
         let rendered = renderer.renderMapped(markdown)
         storage.setAttributedString(rendered.text)
@@ -133,6 +139,7 @@ final class PadRichCoordinator: NSObject {
     func reload(_ markdown: String) {
         guard let textView, let storage else { return }
         let selection = textView.selectedRange
+        let folds = foldedHeadingOrdinals()
         textView.preservingScroll {
             isLoading = true
             let rendered = renderer.renderMapped(markdown)
@@ -150,6 +157,7 @@ final class PadRichCoordinator: NSObject {
             textView.typingAttributes = typingAttributes(at: location)
             lastKnownText = markdown
             pendingEditedRange = nil
+            restoreFolds(ordinals: folds)
             loadImages()
         }
         refreshState()
@@ -466,12 +474,14 @@ final class PadRichCoordinator: NSObject {
     func selectionDidChange() {
         guard let textView, !isLoading else { return }
         let selection = textView.selectedRange
+        unfoldIfNeeded(for: selection)
         if let override = typingOverride, override.location != selection.location || selection.length > 0 {
             typingOverride = nil
         }
         textView.typingAttributes = effectiveTypingAttributes(at: selection.location)
         refreshState()
         applyBehaviors()
+        updateImageHandles()
     }
 
     private func effectiveTypingAttributes(at location: Int) -> [NSAttributedString.Key: Any] {
@@ -559,6 +569,7 @@ final class PadRichCoordinator: NSObject {
         renumberOrderedLists()
         if deletedBreak { removeEmptyLeftoverParagraph() }
         if wasTyping && !undo.isUndoing && !undo.isRedoing { applyMarkdownShortcuts() }
+        if !foldedHeadings.isEmpty { recomputeFolds() }
 
         if spanned || normalizationEdits > 0 {
             // Paragraph spacing changed; re-lay the rest of the document.
@@ -569,6 +580,7 @@ final class PadRichCoordinator: NSObject {
         publish()
         refreshState()
         applyBehaviors()
+        updateImageHandles()
     }
 
     /// After a deletion that spanned paragraphs, an empty plain paragraph left at the cursor
@@ -1306,14 +1318,6 @@ final class PadRichCoordinator: NSObject {
     }
 
     /// A small table with placeholder headers. It is filled in from the Raw pane.
-    func insertTable(rows: Int, columns: Int) {
-        guard let textView else { return }
-        let anchor = paragraphRange(at: textView.selectedRange.location)
-        var paragraphs = renderer.emptyTableParagraphs(rows: rows, columns: columns)
-        paragraphs.append(emptyParagraph(.paragraph))
-        insertParagraphs(paragraphs, after: anchor, placeCursorIn: paragraphs.count - 1)
-    }
-
     private func emptyParagraph(_ kind: BlockKind) -> MarkdownRenderer.Paragraph {
         MarkdownRenderer.Paragraph(content: NSMutableAttributedString(), block: BlockInfo(kind), paragraphStyle: nil)
     }
@@ -1498,12 +1502,12 @@ final class PadRichCoordinator: NSObject {
     }
 
     /// Selects the next occurrence of `needle` after the cursor (wrapping).
-    func jump(toText needle: String) {
+    func jump(toText needle: String, options: NSString.CompareOptions = [], fromStart: Bool = false) {
         guard let textView, !needle.isEmpty else { return }
         let ns = nsString
-        let start = min(NSMaxRange(textView.selectedRange), ns.length)
-        var found = ns.range(of: needle, options: [], range: NSRange(location: start, length: ns.length - start))
-        if found.location == NSNotFound { found = ns.range(of: needle) }
+        let start = fromStart ? 0 : min(NSMaxRange(textView.selectedRange), ns.length)
+        var found = ns.range(of: needle, options: options, range: NSRange(location: start, length: ns.length - start))
+        if found.location == NSNotFound { found = ns.range(of: needle, options: options) }
         guard found.location != NSNotFound else { return }
         textView.reveal(found, flash: false, select: true)
     }
@@ -1530,17 +1534,26 @@ final class PadRichCoordinator: NSObject {
         case footnoteDefinition(String)
         case footnoteReference(String)
         case wikiLink(String)
+        /// A table: opens the table editor.
+        case table(Int)
+        /// A picture: selects it, which shows its resize handles.
+        case selectImage(Int)
     }
 
     func tapAction(atContainerPoint point: CGPoint) -> TapAction? {
         guard let storage, let index = characterHit(atContainerPoint: point) else { return nil }
         let attrs = storage.attributes(at: index, effectiveRange: nil)
         if attrs[.attachment] is TaskCheckboxAttachment { return .toggleTask(index) }
+        if let image = attrs[.attachment] as? MarkdownImageAttachment, image.isLoaded,
+           textView?.selectedRange != NSRange(location: index, length: 1) {
+            return .selectImage(index)
+        }
         if let id = attrs[.mmFootnoteRef] as? String { return .footnoteDefinition(id) }
         if attrs[.mmMarker] as? Bool == true, case .footnote(let id) = blockInfo(forParagraph: paragraphRange(at: index)).kind {
             return .footnoteReference(id)
         }
         if let target = attrs[.mmWikiLink] as? String { return .wikiLink(target) }
+        if attrs[.mmRawTable] != nil { return .table(index) }
         return nil
     }
 
@@ -1550,7 +1563,68 @@ final class PadRichCoordinator: NSObject {
         case .footnoteDefinition(let id): jumpToFootnoteDefinition(id)
         case .footnoteReference(let id): jumpToFootnoteReference(id)
         case .wikiLink(let target): parent.controller.openWikiLink?(target)
+        case .table(let index): editTable(at: index)
+        case .selectImage(let index):
+            guard let textView else { return }
+            let range = NSRange(location: index, length: 1)
+            textView.selectedRange = range
+            updateImageHandles()
+            if !textView.isFirstResponder {
+                _ = textView.becomeFirstResponder()
+                // Taking focus puts the selection back where it was; select the picture again after.
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self, let textView, NSMaxRange(range) <= self.length else { return }
+                    textView.selectedRange = range
+                    self.updateImageHandles()
+                }
+            }
         }
+    }
+
+    // MARK: Tables
+
+    /// The table paragraph at a location and its Markdown.
+    func table(at location: Int) -> (paragraph: NSRange, markdown: String)? {
+        guard let storage, length > 0 else { return nil }
+        let paragraph = paragraphRange(at: min(location, length - 1))
+        guard isRawTable(paragraph),
+              let markdown = storage.attribute(.mmRawTable, at: paragraph.location, effectiveRange: nil) as? String else { return nil }
+        return (paragraph, markdown)
+    }
+
+    /// Opens the table editor on the table at a location.
+    func editTable(at location: Int) {
+        guard let found = table(at: location), let table = MarkdownTable.parse(found.markdown) else { return }
+        textView?.resignFirstResponder()
+        parent.controller.tableEdit = PadTableEdit(location: found.paragraph.location, table: table)
+    }
+
+    /// Puts edited Markdown in place of the table that starts at `location`, or removes the table.
+    func replaceTable(at location: Int, with markdown: String?) {
+        guard let textView, let found = table(at: location), found.paragraph.location == location else { return }
+        let content = contentRange(ofParagraph: found.paragraph)
+        let hasNewline = NSMaxRange(found.paragraph) > NSMaxRange(content)
+        let replacement: NSAttributedString
+        if let markdown, case .table(let headers, let rows)? = MarkdownParser.parse(markdown).first {
+            let paragraphs = renderer.tableParagraphs(headers: headers, rows: rows, markdown: markdown)
+            replacement = renderer.join(paragraphs, trailingNewline: hasNewline)
+        } else {
+            replacement = renderer.join([emptyParagraph(.paragraph)], trailingNewline: hasNewline)
+        }
+        batch {
+            replaceText(found.paragraph, with: replacement)
+            textView.selectedRange = NSRange(location: min(location + (markdown == nil ? 0 : replacement.length - (hasNewline ? 1 : 0)), length), length: 0)
+        }
+        textView.typingAttributes = typingAttributes(at: textView.selectedRange.location)
+    }
+
+    /// Inserts a table made in the table editor after the paragraph at the cursor.
+    func insertTable(markdown: String) {
+        guard let textView, case .table(let headers, let rows)? = MarkdownParser.parse(markdown).first else { return }
+        let anchor = paragraphRange(at: textView.selectedRange.location)
+        var paragraphs = renderer.tableParagraphs(headers: headers, rows: rows, markdown: markdown)
+        paragraphs.append(emptyParagraph(.paragraph))
+        insertParagraphs(paragraphs, after: anchor, placeCursorIn: paragraphs.count - 1)
     }
 
     /// The web link at a character, for the edit menu's Open Link.
@@ -1626,7 +1700,10 @@ final class PadRichCoordinator: NSObject {
     func loadImages() {
         guard let storage else { return }
         var pendingCachedImages: [(PlatformImage, MarkdownImageAttachment)] = []
-        defer { for (image, attachment) in pendingCachedImages { apply(image: image, to: attachment) } }
+        defer {
+            for (image, attachment) in pendingCachedImages { apply(image: image, to: attachment) }
+            updateImageHandles()
+        }
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
             guard let attachment = value as? MarkdownImageAttachment, !attachment.loadRequested else { return }
             attachment.loadRequested = true
@@ -1654,21 +1731,17 @@ final class PadRichCoordinator: NSObject {
         return min(max(base - 2 * padding - 8, 100), 720)
     }
 
-    /// The image's size scaled down (never up) to fit the column.
-    private func fittedSize(of image: PlatformImage) -> CGSize {
-        var size = image.size
-        let maxWidth = maxImageWidth
-        if size.width > maxWidth {
-            size = CGSize(width: maxWidth, height: size.height * maxWidth / size.width)
-        }
-        return CGSize(width: floor(size.width), height: floor(size.height))
+    /// The image's size in the column: its Markdown width, or its own size scaled down (never up) to fit.
+    private func fittedSize(of image: PlatformImage, for attachment: MarkdownImageAttachment) -> CGSize {
+        attachment.displaySize(natural: image.size, maxWidth: maxImageWidth)
     }
 
     private func apply(image: PlatformImage, to attachment: MarkdownImageAttachment) {
         guard let textView, let storage else { return }
         attachment.image = image
-        attachment.bounds = CGRect(origin: .zero, size: fittedSize(of: image))
+        attachment.bounds = CGRect(origin: .zero, size: fittedSize(of: image, for: attachment))
         attachment.isLoaded = true
+        defer { updateImageHandles() }
         var location: Int? = nil
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, range, stop in
             if (value as? MarkdownImageAttachment) === attachment {
@@ -1691,7 +1764,7 @@ final class PadRichCoordinator: NSObject {
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length), options: []) { value, _, _ in
             guard let attachment = value as? MarkdownImageAttachment, attachment.isLoaded,
                   let image = attachment.image else { return }
-            let size = fittedSize(of: image)
+            let size = fittedSize(of: image, for: attachment)
             if attachment.bounds.size != size {
                 attachment.bounds = CGRect(origin: .zero, size: size)
                 changed = true
@@ -1701,6 +1774,118 @@ final class PadRichCoordinator: NSObject {
             textView.layoutManager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: length), actualCharacterRange: nil)
             textView.redisplay()
         }
+        updateImageHandles()
+    }
+
+    // MARK: Picture handles
+
+    private var imageHandles: PadImageHandleOverlay?
+    /// A handle drag in progress: the picture, its size when the drag began, the column width and
+    /// the width so far.
+    private var imageResize: (index: Int, attachment: MarkdownImageAttachment, start: CGSize, column: CGFloat, percent: Int)?
+
+    /// The picture the selection is exactly, if it has loaded.
+    private var selectedImage: (index: Int, attachment: MarkdownImageAttachment)? {
+        guard let textView, let storage else { return nil }
+        let selection = textView.selectedRange
+        guard selection.length == 1, NSMaxRange(selection) <= storage.length,
+              let attachment = storage.attribute(.attachment, at: selection.location, effectiveRange: nil) as? MarkdownImageAttachment,
+              attachment.isLoaded else { return nil }
+        return (selection.location, attachment)
+    }
+
+    /// Where a picture is drawn, in the text view's coordinates; nil when it's folded away.
+    private func imageFrame(at index: Int, attachment: MarkdownImageAttachment) -> CGRect? {
+        guard let textView else { return nil }
+        let layoutManager = textView.layoutManager
+        let range = NSRange(location: index, length: 1)
+        layoutManager.ensureLayout(forCharacterRange: range)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        // Attachment glyphs count as not shown (the attachment draws itself); a folded line has no height.
+        guard glyphs.length > 0 else { return nil }
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        guard line.height > 0 else { return nil }
+        let location = layoutManager.location(forGlyphAt: glyphs.location)
+        let size = attachment.bounds.size
+        let inset = textView.textContainerInset
+        return CGRect(x: inset.left + line.minX + location.x,
+                      y: inset.top + line.minY + location.y - attachment.bounds.minY - size.height,
+                      width: size.width, height: size.height)
+    }
+
+    /// Shows the handles over the selected picture, or hides them.
+    func updateImageHandles() {
+        guard let textView else { return }
+        guard textView.isFirstResponder || imageResize != nil,
+              let (index, attachment) = selectedImage, let frame = imageFrame(at: index, attachment: attachment) else {
+            imageHandles?.isHidden = true
+            textView.setSystemSelectionHidden(false)
+            return
+        }
+        textView.setSystemSelectionHidden(true)
+        let overlay = imageHandles ?? makeImageHandles(in: textView)
+        if textView.subviews.last !== overlay { textView.bringSubviewToFront(overlay) }
+        let target = frame.insetBy(dx: -ImageResize.margin, dy: -ImageResize.margin)
+        if overlay.frame != target { overlay.frame = target }
+        overlay.label = imageResize.map { "\($0.percent)%" }
+        overlay.isHidden = false
+        overlay.setNeedsDisplay()
+    }
+
+    private func makeImageHandles(in textView: PadRichTextView) -> PadImageHandleOverlay {
+        let overlay = PadImageHandleOverlay()
+        overlay.onDrag = { [weak self] corner, dx, ended in self?.dragImageHandle(corner, dx: dx, ended: ended) }
+        textView.addSubview(overlay)
+        textView.imageHandles = overlay
+        imageHandles = overlay
+        return overlay
+    }
+
+    /// Sizes the picture as a handle moves; when the drag ends, writes the width.
+    private func dragImageHandle(_ corner: ImageResize.Corner, dx: CGFloat, ended: Bool) {
+        guard let textView else { return }
+        if imageResize == nil {
+            guard let (index, attachment) = selectedImage else { return }
+            imageResize = (index, attachment, attachment.bounds.size, maxImageWidth, 0)
+        }
+        guard var resize = imageResize, let image = resize.attachment.image else { return }
+        resize.percent = ImageResize.percent(startWidth: resize.start.width, dx: dx, corner: corner, columnWidth: resize.column)
+        imageResize = resize
+        let range = NSRange(location: resize.index, length: 1)
+        if ended {
+            // The old picture keeps its old size, for undo.
+            resize.attachment.bounds = CGRect(origin: .zero, size: resize.start)
+            imageResize = nil
+            setImageWidth(percent: resize.percent, at: resize.index)
+            return
+        }
+        let size = ImageResize.size(natural: image.size, percent: resize.percent, columnWidth: resize.column)
+        if resize.attachment.bounds.size != size {
+            resize.attachment.bounds = CGRect(origin: .zero, size: size)
+            textView.layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            textView.redisplay()
+        }
+        updateImageHandles()
+    }
+
+    /// Gives the picture at `index` a width of `percent` of the column (`{width=N%}`), as one
+    /// undoable change, and keeps it selected.
+    func setImageWidth(percent: Int, at index: Int) {
+        guard let textView, let storage, index < storage.length,
+              let old = storage.attribute(.attachment, at: index, effectiveRange: nil) as? MarkdownImageAttachment,
+              let width = PictureWidth("\(percent)%") else { return }
+        let new = MarkdownImageAttachment(alt: old.alt, source: old.source, width: width, placeholderSize: engine.style.bodySize)
+        if let image = old.image, old.isLoaded {
+            new.image = image
+            new.isLoaded = true
+            new.loadRequested = true
+            new.bounds = CGRect(origin: .zero, size: new.displaySize(natural: image.size, maxWidth: maxImageWidth))
+        }
+        let range = NSRange(location: index, length: 1)
+        batch { addAttributes([.attachment: new], range: range) }
+        textView.selectedRange = range
+        loadImages()
+        updateImageHandles()
     }
 
     // MARK: Focus and typewriter
@@ -1734,12 +1919,182 @@ final class PadRichCoordinator: NSObject {
             attrs = storage.attributes(at: index, effectiveRange: nil)
         }
         let inline = InlineStyle(attributes: attrs)
-        let state = FormatState(bold: inline.bold, italic: inline.italic, strike: inline.strike,
+        var state = FormatState(bold: inline.bold, italic: inline.italic, strike: inline.strike,
                                 code: inline.code, highlight: inline.highlight, hasLink: linkAtSelection() != nil,
                                 blockKind: block.kind, indent: block.indent,
                                 hasSelection: selection.length > 0)
+        state.folded = isSectionFolded(at: selection.location)
         if parent.controller.formatState != state {
             parent.controller.formatState = state
         }
+    }
+}
+
+// MARK: - Folding
+
+/// A heading's section can be collapsed to see the document's structure. Folding is a view
+/// setting only: the text and the file are unchanged. Ported from the Mac editor.
+extension PadRichCoordinator: NSTextStorageDelegate {
+    private func headingLevel(ofParagraph paragraph: NSRange) -> Int? {
+        if case .heading(let level) = blockInfo(forParagraph: paragraph).kind { return level }
+        return nil
+    }
+
+    /// The heading paragraph for a location: the one containing it, or the nearest one above.
+    private func sectionHeading(at location: Int) -> NSRange? {
+        guard let storage, storage.length > 0 else { return nil }
+        var paragraph = paragraphRange(at: location)
+        while true {
+            if paragraph.length > 0, headingLevel(ofParagraph: paragraph) != nil { return paragraph }
+            guard paragraph.location > 0 else { return nil }
+            paragraph = paragraphRange(at: paragraph.location - 1)
+        }
+    }
+
+    /// Everything below a heading up to the next heading of the same or a higher level.
+    private func sectionBody(for heading: NSRange) -> NSRange? {
+        guard let storage, let level = headingLevel(ofParagraph: heading) else { return nil }
+        let total = storage.length
+        let text = storage.string as NSString
+        let start = NSMaxRange(heading)
+        var location = start
+        while location < total {
+            let paragraph = paragraphRange(at: location)
+            if paragraph.length == 0 { break }
+            if let other = headingLevel(ofParagraph: paragraph), other <= level { break }
+            location = NSMaxRange(paragraph)
+        }
+        // Keep the final newline of the last folded paragraph so the next heading starts on its own line.
+        var bodyEnd = min(location, total)
+        if bodyEnd > start, text.character(at: bodyEnd - 1) == MarkdownSyntax.newlineUTF16 { bodyEnd -= 1 }
+        return bodyEnd > start ? NSRange(location: start, length: bodyEnd - start) : nil
+    }
+
+    func isSectionFolded(at location: Int) -> Bool {
+        guard !foldedHeadings.isEmpty, let heading = sectionHeading(at: location) else { return false }
+        return foldedHeadings.contains(heading.location)
+    }
+
+    func toggleFold() {
+        guard let textView, let heading = sectionHeading(at: textView.selectedRange.location) else { return }
+        if foldedHeadings.contains(heading.location) {
+            foldedHeadings.remove(heading.location)
+        } else {
+            guard sectionBody(for: heading) != nil else { return }
+            foldedHeadings.insert(heading.location)
+            textView.selectedRange = NSRange(location: NSMaxRange(contentRange(ofParagraph: heading)), length: 0)
+        }
+        recomputeFolds()
+        refreshState()
+    }
+
+    func unfoldAll() {
+        guard !foldedHeadings.isEmpty else { return }
+        foldedHeadings = []
+        recomputeFolds()
+        refreshState()
+    }
+
+    fileprivate func recomputeFolds() {
+        var ranges: [NSRange] = []
+        var valid: Set<Int> = []
+        for location in foldedHeadings.sorted() {
+            let heading = paragraphRange(at: location)
+            guard heading.location == location, let body = sectionBody(for: heading) else { continue }
+            valid.insert(location)
+            ranges.append(body)
+        }
+        foldedHeadings = valid
+        applyFolds(ranges)
+    }
+
+    fileprivate func applyFolds(_ ranges: [NSRange]) {
+        guard let textView, let layoutManager = textView.richLayoutManager, let storage else { return }
+        let previous = foldedRanges
+        foldedRanges = ranges
+        layoutManager.foldedRanges = ranges
+        layoutManager.foldedHeadings = foldedHeadings.sorted().map { contentRange(ofParagraph: paragraphRange(at: $0)) }
+        let full = NSRange(location: 0, length: storage.length)
+        if previous != ranges {
+            layoutManager.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
+            layoutManager.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+        }
+        textView.setNeedsDisplay()
+        parent.sync?.contentHeightChanged()
+    }
+
+    /// Which headings are folded, by their order in the document (their positions are about to change).
+    fileprivate func foldedHeadingOrdinals() -> Set<Int> {
+        guard !foldedHeadings.isEmpty, let storage else { return [] }
+        var ordinals: Set<Int> = []
+        var ordinal = 0
+        var location = 0
+        while location < storage.length {
+            let paragraph = paragraphRange(at: location)
+            if paragraph.length == 0 { break }
+            if headingLevel(ofParagraph: paragraph) != nil {
+                if foldedHeadings.contains(paragraph.location) { ordinals.insert(ordinal) }
+                ordinal += 1
+            }
+            location = NSMaxRange(paragraph)
+        }
+        return ordinals
+    }
+
+    fileprivate func restoreFolds(ordinals: Set<Int>) {
+        foldedHeadings = []
+        guard !ordinals.isEmpty, let storage else {
+            applyFolds([])
+            return
+        }
+        var ordinal = 0
+        var location = 0
+        while location < storage.length {
+            let paragraph = paragraphRange(at: location)
+            if paragraph.length == 0 { break }
+            if headingLevel(ofParagraph: paragraph) != nil {
+                if ordinals.contains(ordinal) { foldedHeadings.insert(paragraph.location) }
+                ordinal += 1
+            }
+            location = NSMaxRange(paragraph)
+        }
+        recomputeFolds()
+    }
+
+    /// Typing into a folded section (or moving the cursor into it) unfolds it.
+    fileprivate func unfoldIfNeeded(for selection: NSRange) {
+        guard !foldedRanges.isEmpty else { return }
+        var changed = false
+        for location in foldedHeadings {
+            let heading = paragraphRange(at: location)
+            guard let body = sectionBody(for: heading) else { continue }
+            let intersects = selection.length == 0
+                ? (selection.location > body.location && selection.location < NSMaxRange(body))
+                : NSIntersectionRange(selection, body).length > 0
+            if intersects {
+                foldedHeadings.remove(location)
+                changed = true
+            }
+        }
+        if changed { recomputeFolds() }
+    }
+
+    /// Every change to the text, typed or made by the editor: folded headings below it move with it.
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorage.EditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters), !foldedHeadings.isEmpty, !isLoading else { return }
+        // The range the edit replaced, in the text as it was before.
+        let affected = NSRange(location: editedRange.location, length: max(editedRange.length - delta, 0))
+        var updated: Set<Int> = []
+        for location in foldedHeadings {
+            if NSMaxRange(affected) <= location {
+                updated.insert(location + delta)       // edit above: the heading moves
+            } else if affected.location < location {
+                continue                                // the edit swallows the heading start: unfold
+            } else {
+                updated.insert(location)                // edit in the heading or below: recomputed later
+            }
+        }
+        foldedHeadings = updated
     }
 }

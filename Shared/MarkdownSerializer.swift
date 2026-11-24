@@ -252,7 +252,7 @@ enum MarkdownSerializer {
 
     private enum Segment {
         case text(String, InlineStyle)
-        case image(alt: String, source: String)
+        case image(alt: String, source: String, width: PictureWidth?)
     }
 
     private enum Wrapper: Equatable {
@@ -302,7 +302,7 @@ enum MarkdownSerializer {
             if attrs[.mmMarker] != nil { return }
             if let attachment = attrs[.attachment] {
                 if let image = attachment as? MarkdownImageAttachment {
-                    segments.append(.image(alt: image.alt, source: image.source))
+                    segments.append(.image(alt: image.alt, source: image.source, width: image.width))
                 }
                 return
             }
@@ -352,9 +352,9 @@ enum MarkdownSerializer {
         for (index, segment) in merged.enumerated() {
             let nextWanted = wanted(of: index + 1 < merged.count ? merged[index + 1] : nil)
             switch segment {
-            case .image(let alt, let source):
+            case .image(let alt, let source, let width):
                 transition(to: [])
-                out += "![\(alt.replacingOccurrences(of: "]", with: "\\]"))](\(source))"
+                out += "![\(alt.replacingOccurrences(of: "]", with: "\\]"))](\(source))" + (width?.attribute ?? "")
             case .text(let string, let style):
                 // Wiki links and footnote references are atomic tokens.
                 if let target = style.wikiLink {

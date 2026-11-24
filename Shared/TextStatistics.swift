@@ -87,7 +87,7 @@ struct TextStatistics {
                 case .text(let s), .code(let s): out += s
                 case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids): walk(kids)
                 case .link(let label, _): walk(label)
-                case .image(let alt, _): out += alt
+                case .image(let alt, _, _): out += alt
                 case .tag(let name): out += "#" + name
                 case .wikiLink(let target, let label): out += label ?? target
                 case .footnoteRef: break
@@ -177,7 +177,7 @@ struct TextStatistics {
         func walk(_ nodes: [InlineNode]) {
             for node in nodes {
                 switch node {
-                case .image(let alt, let source):
+                case .image(let alt, let source, _):
                     entries.append(AttachmentEntry(id: entries.count, kind: .image, label: alt.isEmpty ? source : alt, target: source))
                 case .link(let label, let url):
                     entries.append(AttachmentEntry(id: entries.count, kind: .link, label: plainNodes(label), target: url))
@@ -207,7 +207,7 @@ struct TextStatistics {
             switch node {
             case .text(let s), .code(let s): out += s
             case .emphasis(let kids), .strong(let kids), .strike(let kids), .highlight(let kids), .link(let kids, _): out += plainNodes(kids)
-            case .image(let alt, _): out += alt
+            case .image(let alt, _, _): out += alt
             case .tag(let name): out += "#" + name
             case .wikiLink(let target, let label): out += label ?? target
             case .footnoteRef: break

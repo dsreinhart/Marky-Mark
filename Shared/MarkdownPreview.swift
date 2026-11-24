@@ -3,7 +3,7 @@
 //  Markwright
 //
 //  Read-only rendered view of a Markdown document, styled from ThemeSettings.
-//  Used by the iPad app for the Help guide and sheets opened through wiki links.
+//  Used by the iPad app for the Help guide.
 //
 
 import SwiftUI
@@ -304,7 +304,7 @@ private struct PreviewContent: View, Equatable {
 
     private func soleImage(_ text: String) -> (alt: String, source: String)? {
         let nodes = InlineParser.parse(text.trimmingCharacters(in: .whitespaces))
-        guard nodes.count == 1, case .image(let alt, let source) = nodes[0] else { return nil }
+        guard nodes.count == 1, case .image(let alt, let source, _) = nodes[0] else { return nil }
         return (alt, source)
     }
 
@@ -393,7 +393,7 @@ private struct PreviewContent: View, Equatable {
             case .strong(let kids): append(kids, to: &result, base: base, bold: true, italic: italic, strike: strike, link: link)
             case .strike(let kids): append(kids, to: &result, base: base, bold: bold, italic: italic, strike: true, link: link)
             case .link(let label, let url): append(label, to: &result, base: base, bold: bold, italic: italic, strike: strike, link: url)
-            case .image(let alt, let source):
+            case .image(let alt, let source, _):
                 var piece = AttributedString("\u{1F5BC} " + (alt.isEmpty ? source : alt))
                 piece.foregroundColor = theme.linkColor
                 if let url = resolve(source) { piece.link = url }

@@ -42,21 +42,12 @@ final class DocumentStore {
     }
 
     /// Lets tests point the store at a scratch folder.
-    nonisolated(unsafe) static var supportFolderOverride: URL? = nil
-
-    static var supportFolder: URL {
-        let base = supportFolderOverride
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let folder = supportFolderOverride ?? base.appending(path: "Markwright", directoryHint: .isDirectory)
-        let fm = FileManager.default
-        // Drafts and versions written under the app's earlier name move over once.
-        let legacy = base.appending(path: "Marky Mark", directoryHint: .isDirectory)
-        if supportFolderOverride == nil, !fm.fileExists(atPath: folder.path), fm.fileExists(atPath: legacy.path) {
-            try? fm.moveItem(at: legacy, to: folder)
-        }
-        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder
+    nonisolated static var supportFolderOverride: URL? {
+        get { SupportFolder.override }
+        set { SupportFolder.override = newValue }
     }
+
+    static var supportFolder: URL { SupportFolder.url }
 
     // MARK: - Lookup
 

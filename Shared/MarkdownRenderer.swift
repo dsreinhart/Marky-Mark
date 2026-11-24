@@ -245,7 +245,7 @@ struct MarkdownRenderer {
     #else
     /// iPadOS has no text tables: a table is one read-only paragraph of tab-separated rows (the
     /// header in bold), saved back exactly as the Markdown it came from (`mmRawTable`). It is
-    /// edited in the Raw pane.
+    /// edited in the table editor (a tap on it) or in the Raw pane.
     func tableParagraphs(headers: [String], rows: [[String]], markdown: String? = nil) -> [Paragraph] {
         let columns = max(headers.count, rows.map(\.count).max() ?? 0, 1)
         let allRows = [headers] + rows
@@ -273,13 +273,6 @@ struct MarkdownRenderer {
         }
         content.addAttribute(.mmRawTable, value: source, range: NSRange(location: 0, length: content.length))
         return [Paragraph(content: content, block: block, paragraphStyle: ps)]
-    }
-
-    /// An empty table with placeholder headers, used by the toolbar.
-    func emptyTableParagraphs(rows: Int, columns: Int) -> [Paragraph] {
-        let headers = (1...max(columns, 1)).map { "Header \($0)" }
-        let body = Array(repeating: Array(repeating: "", count: max(columns, 1)), count: max(rows, 1))
-        return tableParagraphs(headers: headers, rows: body)
     }
     #endif
 
@@ -321,8 +314,8 @@ struct MarkdownRenderer {
                 style.link = url
                 out.append(inlineAttributed(label, block: block, paragraphStyle: paragraphStyle,
                                             base: style, isHeaderCell: isHeaderCell))
-            case .image(let alt, let source):
-                out.append(imageAttachment(alt: alt, source: source, block: block, paragraphStyle: paragraphStyle))
+            case .image(let alt, let source, let width):
+                out.append(imageAttachment(alt: alt, source: source, width: width, block: block, paragraphStyle: paragraphStyle))
             case .highlight(let children):
                 var style = base
                 style.highlight = true
@@ -348,9 +341,9 @@ struct MarkdownRenderer {
         return out
     }
 
-    func imageAttachment(alt: String, source: String,
+    func imageAttachment(alt: String, source: String, width: PictureWidth? = nil,
                          block: BlockInfo, paragraphStyle: NSParagraphStyle?) -> NSAttributedString {
-        let attachment = MarkdownImageAttachment(alt: alt, source: source, placeholderSize: engine.style.bodySize)
+        let attachment = MarkdownImageAttachment(alt: alt, source: source, width: width, placeholderSize: engine.style.bodySize)
         let result = NSMutableAttributedString(attachment: attachment)
         result.setAttributes(engine.attachmentAttributes(block: block, attachment: attachment, isMarker: false,
                                                          paragraphStyle: paragraphStyle),

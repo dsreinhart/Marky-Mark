@@ -188,8 +188,17 @@ extension PadEditorController {
         if let formatted { formatted.insertHorizontalRule() } else { insertBlock("---") }
     }
 
+    /// In the formatted view: edits the table at the cursor, or makes a new one in the table editor.
     func addTable() {
-        if let formatted { formatted.insertTable(rows: 1, columns: 2) } else {
+        if let formatted {
+            let location = formatted.textView?.selectedRange.location ?? 0
+            if formatted.table(at: location) != nil {
+                formatted.editTable(at: location)
+            } else {
+                formatted.textView?.resignFirstResponder()
+                tableEdit = PadTableEdit(location: nil, table: .blank)
+            }
+        } else {
             insertBlock("| Header 1 | Header 2 |\n| --- | --- |\n| Cell | Cell |", selectingPlaceholder: "Header 1")
         }
     }
@@ -201,13 +210,52 @@ extension PadEditorController {
         }
     }
 
+    /// The table editor's Done button.
+    func finishTableEdit(_ edit: PadTableEdit, table: MarkdownTable) {
+        tableEdit = nil
+        guard let rich else { return }
+        _ = rich.textView?.becomeFirstResponder()
+        if let location = edit.location {
+            rich.replaceTable(at: location, with: table.markdown)
+        } else {
+            rich.insertTable(markdown: table.markdown)
+        }
+    }
+
+    /// The table editor's Delete Table button.
+    func deleteTable(_ edit: PadTableEdit) {
+        tableEdit = nil
+        guard let rich, let location = edit.location else { return }
+        _ = rich.textView?.becomeFirstResponder()
+        rich.replaceTable(at: location, with: nil)
+    }
+
+    // MARK: Lists and sections (formatted view)
+
+    /// Nests list items one level deeper or shallower.
+    func indent(forward: Bool) {
+        formatted?.changeIndent(by: forward ? 1 : -1)
+    }
+
+    func toggleFold() {
+        formatted?.toggleFold()
+    }
+
+    func unfoldAll() {
+        formatted?.unfoldAll()
+    }
+
     // MARK: Navigation
 
     func goToHeading(_ index: Int) {
         if let formatted { formatted.jumpToHeading(index) } else { jumpToHeading(index) }
     }
 
-    func goToText(_ needle: String) {
-        if let formatted { formatted.jump(toText: needle) } else { jump(toText: needle) }
+    func goToText(_ needle: String, options: NSString.CompareOptions = [], fromStart: Bool = false) {
+        if let formatted {
+            formatted.jump(toText: needle, options: options, fromStart: fromStart)
+        } else {
+            jump(toText: needle, options: options, fromStart: fromStart)
+        }
     }
 }

@@ -17,7 +17,8 @@ nonisolated indirect enum InlineNode: Equatable {
     case strong([InlineNode])
     case strike([InlineNode])
     case link(label: [InlineNode], url: String)
-    case image(alt: String, source: String)
+    /// `![alt](source)`, optionally followed by `{width=…}`.
+    case image(alt: String, source: String, width: PictureWidth? = nil)
     case highlight([InlineNode])
     /// `#tag` or `#nested/tag`; the stored string has no leading `#`.
     case tag(String)
@@ -226,6 +227,9 @@ nonisolated struct InlineParser {
         if dest.hasPrefix("<"), dest.hasSuffix(">") { dest = String(dest.dropFirst().dropLast()) }
         let end = i + 1
         if isImage {
+            if let (width, afterWidth) = PictureWidth.parseAttribute(in: chars, at: end) {
+                return (.image(alt: Self.unescape(label), source: dest, width: width), afterWidth)
+            }
             return (.image(alt: Self.unescape(label), source: dest), end)
         }
         return (.link(label: InlineParser.parse(label), url: dest), end)

@@ -104,7 +104,7 @@ enum MarkdownHighlighter {
             wikiLinks(line, offset: offset, in: textStorage)
             color(line, offset: offset, pattern: #"\[\^[^\]\s]+\](?!:)"#, color: .systemPurple, font: medium, in: textStorage)
             color(line, offset: offset, pattern: #"\[[^\]]*\]\([^)]+\)"#, color: .systemBlue, font: regular, underline: true, in: textStorage)
-            color(line, offset: offset, pattern: #"!\[[^\]]*\]\([^)]+\)"#, color: .systemIndigo, font: regular, underline: true, in: textStorage)
+            color(line, offset: offset, pattern: #"!\[[^\]]*\]\([^)]+\)(\{[^}\n]*\})?"#, color: .systemIndigo, font: regular, underline: true, in: textStorage)
             color(line, offset: offset, pattern: #"\*\*(.+?)\*\*"#, color: baseColor, font: bold, in: textStorage)
             color(line, offset: offset, pattern: #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#, color: .systemPurple, font: regular.italicVariant(), in: textStorage)
             color(line, offset: offset, pattern: #"`([^`]+)`"#, color: .systemTeal,

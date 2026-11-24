@@ -33,7 +33,7 @@ struct EditorStyle: Equatable {
     let headingDividers: Bool
     let fontFamily: String
     let lineSpacing: CGFloat
-    let maxWidth: CGFloat
+    var maxWidth: CGFloat
     /// nil means follow the system appearance.
     let editorBackground: PlatformColor?
     let textColor: PlatformColor

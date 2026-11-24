@@ -18,12 +18,15 @@ import UIKit
 nonisolated final class MarkdownImageAttachment: NSTextAttachment {
     let alt: String
     let source: String
+    /// The width set in the Markdown (`{width=…}`), if any.
+    let width: PictureWidth?
     var loadRequested = false
     var isLoaded = false
 
-    init(alt: String, source: String, placeholderSize: CGFloat) {
+    init(alt: String, source: String, width: PictureWidth? = nil, placeholderSize: CGFloat) {
         self.alt = alt
         self.source = source
+        self.width = width
         super.init(data: nil, ofType: nil)
         let label = alt.isEmpty ? (source.isEmpty ? "Image" : source) : alt
         let chip = ImagePlaceholder.chip(text: label, fontSize: placeholderSize)
@@ -33,6 +36,14 @@ nonisolated final class MarkdownImageAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    /// The size to draw a picture of `natural` size (points) in a column `maxWidth` wide: the
+    /// Markdown's width if it has one, otherwise its own size; never wider than the column.
+    func displaySize(natural: CGSize, maxWidth: CGFloat) -> CGSize {
+        guard natural.width > 0, natural.height > 0 else { return natural }
+        let target = width.map { CGFloat($0.cssPixels(fullWidth: Double(maxWidth))) } ?? min(natural.width, maxWidth)
+        return CGSize(width: floor(target), height: floor(natural.height * target / natural.width))
     }
 
     #if os(iOS)
