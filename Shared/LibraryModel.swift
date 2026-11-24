@@ -63,6 +63,11 @@ final class LibraryModel {
     private(set) var isScanning = false
     var searchText = ""
     var selectedKeyword: String? = nil
+    /// The group the sidebar last pointed at, so File > New Sheet in Library puts the sheet there too.
+    @ObservationIgnored var insertionFolder: URL? = nil
+    /// Counts finished drops, so every row clears its drop outline (a row the drag only passed
+    /// over doesn't always hear that the drag left it).
+    private(set) var dropCount = 0
 
     @ObservationIgnored private var monitors: [DispatchSourceFileSystemObject] = []
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -360,6 +365,7 @@ final class LibraryModel {
         do {
             try TextFileIO.move(node.url, to: target)
             carryOver(from: node, to: target)
+            moveExpansion(from: node.url, to: target)
             scheduleRefresh()
             return target
         } catch {
@@ -376,6 +382,163 @@ final class LibraryModel {
             Document.moveVersions(from: file.url, to: moved)
             GoalStore.shared.rename(from: path, to: Document.stablePath(moved))
         }
+    }
+
+    // MARK: - Moving
+
+    enum MoveError: LocalizedError {
+        case intoItself(String)
+        case nameTaken(String, folder: String)
+        case failed(String)
+        var errorDescription: String? {
+            switch self {
+            case .intoItself(let name): return "\u{201C}\(name)\u{201D} can't go inside itself."
+            case .nameTaken(let name, let folder): return "There's already an item named \u{201C}\(name)\u{201D} in \u{201C}\(folder)\u{201D}."
+            case .failed(let detail): return detail
+            }
+        }
+    }
+
+    /// Moves a sheet or group into `folder` (the library folder or a group in it), taking along
+    /// the sheet's "<Name>-images" picture folder, its versions, goal, expanded state and open tabs
+    /// (`onMoved` is called for each moved item so the app can retarget open documents).
+    /// Returns the new URL, nil when nothing needed to move (already there).
+    @discardableResult
+    func move(_ source: URL, into folder: URL, onMoved: (URL, URL) -> Void = { _, _ in }) throws -> URL? {
+        let fm = FileManager.default
+        let sourcePath = Document.stablePath(source), folderPath = Document.stablePath(folder)
+        let name = source.lastPathComponent
+        if Document.stablePath(source.deletingLastPathComponent()) == folderPath { return nil }
+        if folderPath == sourcePath || folderPath.hasPrefix(sourcePath + "/") {
+            throw MoveError.intoItself(source.deletingPathExtension().lastPathComponent)
+        }
+        let folderName = folderURL.map { Document.stablePath($0) } == folderPath ? (folderURL?.lastPathComponent ?? "") : folder.lastPathComponent
+        var isDirectory: ObjCBool = false
+        let isGroup = fm.fileExists(atPath: source.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        let target = folder.appending(path: name, directoryHint: isGroup ? .isDirectory : .notDirectory)
+        guard !fm.fileExists(atPath: target.path) else { throw MoveError.nameTaken(name, folder: folderName) }
+
+        // The sheet's own picture folder, when its text links into it.
+        var pictures: (folder: URL, shared: Bool)? = nil
+        if !isGroup {
+            let own = ImageFolderLinks.folderName(forDocumentNamed: source.deletingPathExtension().lastPathComponent)
+            let ownURL = source.deletingLastPathComponent().appending(path: own, directoryHint: .isDirectory)
+            let text = (try? TextFileFormat.read(from: source).text) ?? ""
+            var dir: ObjCBool = false
+            if ImageFolderLinks.references(text, folder: own), fm.fileExists(atPath: ownURL.path, isDirectory: &dir), dir.boolValue {
+                if fm.fileExists(atPath: folder.appending(path: own).path) {
+                    throw MoveError.nameTaken(own, folder: folderName)
+                }
+                pictures = (ownURL, Self.otherSheet(in: source.deletingLastPathComponent(), besides: source, linksTo: own))
+            }
+        }
+
+        let movedNode = root.flatMap { Self.find(source, in: $0) }
+        do {
+            try TextFileIO.move(source, to: target)
+        } catch {
+            throw MoveError.failed("Couldn't move \u{201C}\(name)\u{201D}: \(error.localizedDescription)")
+        }
+        if let movedNode { carryOver(from: movedNode, to: target) }
+        moveExpansion(from: source, to: target)
+        onMoved(source, target)
+
+        if let pictures {
+            let destination = folder.appending(path: pictures.folder.lastPathComponent, directoryHint: .isDirectory)
+            if pictures.shared {
+                // Another sheet beside it uses this folder too: copy just this sheet's pictures.
+                let text = (try? TextFileFormat.read(from: target).text) ?? ""
+                try? fm.createDirectory(at: destination, withIntermediateDirectories: true)
+                for file in ImageFolderLinks.linkedFiles(in: text, folder: pictures.folder.lastPathComponent) {
+                    let from = pictures.folder.appending(path: file)
+                    guard fm.fileExists(atPath: from.path) else { continue }
+                    try? fm.copyItem(at: from, to: destination.appending(path: file))
+                }
+            } else {
+                try? TextFileIO.move(pictures.folder, to: destination)
+                moveExpansion(from: pictures.folder, to: destination)
+            }
+        }
+        setExpanded(folder, true)
+        dropCount += 1
+        scheduleRefresh()
+        return target
+    }
+
+    /// Whether another Markdown file in `directory` links into the picture folder `pictureFolder`.
+    private static func otherSheet(in directory: URL, besides sheet: URL, linksTo pictureFolder: String) -> Bool {
+        let items = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return items.contains { item in
+            item.standardizedFileURL != sheet.standardizedFileURL
+                && markdownExtensions.contains(item.pathExtension.lowercased())
+                && ImageFolderLinks.references((try? TextFileFormat.read(from: item).text) ?? "", folder: pictureFolder)
+        }
+    }
+
+    /// Where `url` could be moved: the top level and every group, minus its own folder, itself,
+    /// anything inside it and picture folders. `depth` indents the group's name in a menu.
+    func moveDestinations(for url: URL) -> [(url: URL, name: String, depth: Int)] {
+        guard let root else { return [] }
+        let path = Document.stablePath(url), parent = Document.stablePath(url.deletingLastPathComponent())
+        var result: [(URL, String, Int)] = []
+        func walk(_ node: LibraryNode, depth: Int) {
+            let nodePath = Document.stablePath(node.url)
+            if nodePath == path || nodePath.hasPrefix(path + "/") { return }
+            // Picture folders ("Name-images") hold a sheet's pictures, not sheets.
+            if depth > 0, node.name.hasSuffix("-images") { return }
+            if nodePath != parent { result.append((node.url, depth == 0 ? "Top Level" : node.name, depth)) }
+            for child in node.children ?? [] where child.isFolder { walk(child, depth: depth + 1) }
+        }
+        walk(root, depth: 0)
+        return result
+    }
+
+    static func find(_ url: URL, in node: LibraryNode) -> LibraryNode? {
+        if Document.stablePath(node.url) == Document.stablePath(url) { return node }
+        for child in node.children ?? [] {
+            if let found = find(url, in: child) { return found }
+        }
+        return nil
+    }
+
+    // MARK: - Expanded groups
+
+    /// Groups open in the sidebar, by path inside the library folder. One set for every window
+    /// and tab, so clicking in one never changes what another shows open.
+    private(set) var expandedGroups: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "library.expandedGroups") ?? [])
+
+    private func relativePath(_ url: URL) -> String? {
+        guard let folderURL else { return nil }
+        let base = Document.stablePath(folderURL), path = Document.stablePath(url)
+        if path == base { return "" }
+        guard path.hasPrefix(base + "/") else { return nil }
+        return String(path.dropFirst(base.count + 1))
+    }
+
+    func isExpanded(_ url: URL) -> Bool {
+        relativePath(url).map(expandedGroups.contains) ?? false
+    }
+
+    func setExpanded(_ url: URL, _ expanded: Bool) {
+        guard let key = relativePath(url), !key.isEmpty, expandedGroups.contains(key) != expanded else { return }
+        if expanded { expandedGroups.insert(key) } else { expandedGroups.remove(key) }
+        saveExpanded()
+    }
+
+    /// A moved or renamed group keeps its own open state and that of the groups inside it.
+    private func moveExpansion(from old: URL, to new: URL) {
+        guard let oldKey = relativePath(old), let newKey = relativePath(new), !oldKey.isEmpty else { return }
+        var changed = false
+        for key in expandedGroups where key == oldKey || key.hasPrefix(oldKey + "/") {
+            expandedGroups.remove(key)
+            expandedGroups.insert(newKey + key.dropFirst(oldKey.count))
+            changed = true
+        }
+        if changed { saveExpanded() }
+    }
+
+    private func saveExpanded() {
+        UserDefaults.standard.set(expandedGroups.sorted(), forKey: "library.expandedGroups")
     }
 
     func trash(_ node: LibraryNode) {

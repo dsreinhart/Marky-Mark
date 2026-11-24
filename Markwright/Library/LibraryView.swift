@@ -20,6 +20,8 @@ struct LibraryView: View {
     @State private var renameText = ""
     @State private var showNewGroup = false
     @State private var newGroupName = ""
+    @State private var newGroupFolder: URL? = nil
+    @State private var moveError: String? = nil
     private var library = LibraryModel.shared
 
     init(currentFileURL: URL?, currentText: String = "", onNavigateMatch: ((String, Bool) -> Void)? = nil) {
@@ -56,8 +58,18 @@ struct LibraryView: View {
         }
         .alert("New Group", isPresented: $showNewGroup) {
             TextField("Group name", text: $newGroupName)
-            Button("Create") { _ = library.newGroup(named: newGroupName); newGroupName = "" }
+            Button("Create") {
+                if library.newGroup(in: newGroupFolder, named: newGroupName), let folder = newGroupFolder {
+                    library.setExpanded(folder, true)
+                }
+                newGroupName = ""
+            }
             Button("Cancel", role: .cancel) { newGroupName = "" }
+        }
+        .alert("Couldn\u{2019}t Move That", isPresented: Binding(get: { moveError != nil }, set: { if !$0 { moveError = nil } })) {
+            Button("OK") { moveError = nil }
+        } message: {
+            Text(moveError ?? "")
         }
     }
 
@@ -65,17 +77,22 @@ struct LibraryView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "books.vertical").foregroundStyle(.secondary)
-            Text(library.folderURL?.lastPathComponent ?? "Library")
-                .font(.headline)
-                .lineLimit(1)
+            Group {
+                if let root = library.root, !library.isFiltering {
+                    LibraryDropTarget(folder: root.url, highlights: true, onDrop: drop) { libraryTitle }
+                        .fixedSize()
+                        .help("Drop a sheet or group here to move it to the top level")
+                } else {
+                    libraryTitle
+                }
+            }
             if library.isScanning {
                 ProgressView().controlSize(.mini)
             }
             Spacer()
             Menu {
-                Button("New Sheet") { createSheet() }
-                Button("New Group…") { showNewGroup = true }
+                Button(newItemTitle("New Sheet")) { createSheet(in: insertionFolder) }
+                Button(newItemTitle("New Group") + "\u{2026}") { newGroupFolder = insertionFolder; showNewGroup = true }
                 Divider()
                 Button("Choose Library Folder…") { library.chooseFolder() }
                 if let url = library.folderURL {
@@ -90,6 +107,15 @@ struct LibraryView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private var libraryTitle: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "books.vertical").foregroundStyle(.secondary)
+            Text(library.folderURL?.lastPathComponent ?? "Library")
+                .font(.headline)
+                .lineLimit(1)
+        }
     }
 
     private var emptyState: some View {
@@ -216,11 +242,20 @@ struct LibraryView: View {
                 .listStyle(.sidebar)
             }
         } else if let root = library.root {
-            List(root.children ?? [], children: \.children, selection: $selection) { node in
-                row(node)
+            List(selection: $selection) {
+                LibraryTree(nodes: root.children ?? [], row: row, onDrop: drop)
+                // A strip after the last row takes drops for the top level of the library
+                // (the list's own empty space doesn't receive them).
+                LibraryDropTarget(folder: root.url, highlights: true, onDrop: drop) {
+                    Color.clear.frame(height: 44)
+                }
+                .help("Drop here to move to the top level of \u{201C}\(root.name)\u{201D}")
             }
             .listStyle(.sidebar)
-            .onChange(of: selection) { _, url in open(url) }
+            .onChange(of: selection) { _, url in
+                library.insertionFolder = insertionFolder
+                open(url)
+            }
         }
     }
 
@@ -228,6 +263,7 @@ struct LibraryView: View {
     /// already the selected row (the current sheet), which a selection change alone would miss.
     private func searchRow(_ node: LibraryNode) -> some View {
         row(node)
+            .tag(node.url)
             .contentShape(Rectangle())
             .onTapGesture {
                 selection = node.url
@@ -256,14 +292,25 @@ struct LibraryView: View {
                 }
             }
         }
-        .tag(node.url)
+        .draggable(node.url)
         .contextMenu {
             if node.isFolder {
                 Button("New Sheet in Group") { createSheet(in: node.url) }
+                Button("New Group Inside\u{2026}") { newGroupFolder = node.url; showNewGroup = true }
             } else {
                 Button("Open in New Tab") { open(node.url) }
             }
             Button("Rename…") { renameTarget = node; renameText = node.isFolder ? node.name : node.url.lastPathComponent }
+            let destinations = library.moveDestinations(for: node.url)
+            if !destinations.isEmpty {
+                Menu("Move To") {
+                    ForEach(destinations, id: \.url) { destination in
+                        Button(String(repeating: "    ", count: max(destination.depth - 1, 0)) + destination.name) {
+                            _ = drop([node.url], into: destination.url)
+                        }
+                    }
+                }
+            }
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) }
             Divider()
             Button("Move to Trash", role: .destructive) { library.trash(node) }
@@ -318,7 +365,41 @@ struct LibraryView: View {
         }
     }
 
+    /// Where New Sheet and New Group put things: the selected group, or the group holding the
+    /// selected sheet; the top level when nothing in the library is selected.
+    private var insertionFolder: URL? {
+        guard let selection, let root = library.root, let node = LibraryModel.find(selection, in: root),
+              Document.stablePath(node.url) != Document.stablePath(root.url) else { return nil }
+        let folder = node.isFolder ? node.url : node.url.deletingLastPathComponent()
+        return Document.stablePath(folder) == Document.stablePath(root.url) ? nil : folder
+    }
+
+    /// "New Sheet" at the top level, "New Sheet in “Work”" inside a group.
+    private func newItemTitle(_ base: String) -> String {
+        guard let folder = insertionFolder else { return base }
+        return base + " in \u{201C}\(folder.lastPathComponent)\u{201D}"
+    }
+
+    /// Moves sheets or groups dragged within the library into `folder`.
+    private func drop(_ urls: [URL], into folder: URL) -> Bool {
+        let items = urls.filter { library.contains($0) }
+        guard !items.isEmpty else { return false }
+        var moved = false
+        for url in items {
+            do {
+                if let newURL = try library.move(url, into: folder, onMoved: { DocumentStore.shared.filesMoved(from: $0, to: $1) }) {
+                    moved = true
+                    if selection.map(Document.stablePath) == Document.stablePath(url) { selection = newURL }
+                }
+            } catch {
+                moveError = error.localizedDescription
+            }
+        }
+        return moved
+    }
+
     private func createSheet(in folder: URL? = nil) {
+        if let folder { library.setExpanded(folder, true) }
         guard let url = library.newSheet(in: folder) else { return }
         let store = DocumentStore.shared
         if let document = store.openDocument(at: url) {

@@ -1096,6 +1096,95 @@ extension FileHandling {
             #expect(WikiLinkResolver.resolve("Neighbour", near: document)?.path == neighbour.path)
             #expect(WikiLinkResolver.resolve("Absent", near: document) == nil)
         }
+
+        // MARK: Moving and expanded groups
+
+        @Test func movingASheetTakesItsPicturesAlong() async throws {
+            let folder = TempFolder()
+            folder.write("![a](Trip-images/a-20261124-101500.jpg)", to: "Trip.md")
+            folder.write("jpg", to: "Trip-images/a-20261124-101500.jpg")
+            folder.write("x", to: "Work/Other.md")
+            await open(folder)
+            var moved: [(URL, URL)] = []
+            let target = try library.move(folder.url.appending(path: "Trip.md"), into: folder.url.appending(path: "Work"),
+                                          onMoved: { moved.append(($0, $1)) })
+            #expect(target?.lastPathComponent == "Trip.md")
+            #expect(folder.exists("Work/Trip.md") && !folder.exists("Trip.md"))
+            #expect(folder.exists("Work/Trip-images/a-20261124-101500.jpg") && !folder.exists("Trip-images"),
+                    "the picture folder moves with the sheet, so its relative links keep working")
+            #expect(moved.count == 1)
+            #expect(library.isExpanded(folder.url.appending(path: "Work")), "the destination opens to show the moved sheet")
+        }
+
+        @Test func sharedPictureFolderIsCopiedNotMoved() async throws {
+            let folder = TempFolder()
+            folder.write("![a](Trip-images/a.jpg)", to: "Trip.md")
+            folder.write("![b](Trip-images/b.jpg)", to: "Notes.md")
+            folder.write("a", to: "Trip-images/a.jpg")
+            folder.write("b", to: "Trip-images/b.jpg")
+            folder.write("x", to: "Work/Keep.md")
+            await open(folder)
+            try library.move(folder.url.appending(path: "Trip.md"), into: folder.url.appending(path: "Work"))
+            #expect(folder.exists("Trip-images/a.jpg") && folder.exists("Trip-images/b.jpg"), "Notes still uses them")
+            #expect(folder.exists("Work/Trip-images/a.jpg"))
+            #expect(!folder.exists("Work/Trip-images/b.jpg"), "only the moved sheet's own pictures are copied")
+        }
+
+        @Test func movingAGroupBackToTheTopKeepsItsOpenGroups() async throws {
+            let folder = TempFolder()
+            folder.write("x", to: "Work/Projects/Plan.md")
+            folder.write("y", to: "Archive/Old.md")
+            await open(folder)
+            let projects = folder.url.appending(path: "Work/Projects", directoryHint: .isDirectory)
+            library.setExpanded(projects, true)
+            try library.move(projects, into: folder.url.appending(path: "Archive"))
+            #expect(folder.exists("Archive/Projects/Plan.md"))
+            #expect(library.isExpanded(folder.url.appending(path: "Archive/Projects")))
+            #expect(!library.isExpanded(projects))
+            try library.move(folder.url.appending(path: "Archive/Projects"), into: folder.url)
+            #expect(folder.exists("Projects/Plan.md"), "the library folder itself is a drop target (top level)")
+        }
+
+        @Test func movesThatCantWorkAreRefused() async throws {
+            let folder = TempFolder()
+            folder.write("a", to: "Plan.md")
+            folder.write("b", to: "Work/Plan.md")
+            folder.write("c", to: "Work/Inner/Deep.md")
+            await open(folder)
+            let work = folder.url.appending(path: "Work", directoryHint: .isDirectory)
+            #expect(throws: LibraryModel.MoveError.self) { try library.move(folder.url.appending(path: "Plan.md"), into: work) }
+            #expect(folder.read("Plan.md") == "a" && folder.read("Work/Plan.md") == "b", "nothing is overwritten")
+            #expect(throws: LibraryModel.MoveError.self) { try library.move(work, into: work.appending(path: "Inner")) }
+            #expect(try library.move(work.appending(path: "Plan.md"), into: work) == nil, "same folder: nothing to do")
+        }
+
+        @Test func moveToListsGroupsButNotItselfItsFolderOrPictureFolders() async {
+            let folder = TempFolder()
+            folder.write("x", to: "Work/Plan.md")
+            folder.write("y", to: "Work/Inner/Deep.md")
+            folder.write("z", to: "Home/Note.md")
+            folder.write("p", to: "Home/Note-images/p-20261124-101500.jpg")
+            await open(folder)
+            let names = { (url: URL) in self.library.moveDestinations(for: url).map(\.name) }
+            #expect(names(folder.url.appending(path: "Work/Plan.md")) == ["Top Level", "Home", "Inner"],
+                    "not its own group, and no picture folders")
+            #expect(names(folder.url.appending(path: "Work", directoryHint: .isDirectory)) == ["Home"],
+                    "a group can't go inside itself or stay where it is")
+        }
+
+        @Test func expandedGroupsAreSharedAndFollowRenames() async {
+            let folder = TempFolder()
+            folder.write("x", to: "Work/Plan.md")
+            await open(folder)
+            let work = folder.url.appending(path: "Work", directoryHint: .isDirectory)
+            library.setExpanded(work, true)
+            #expect(library.isExpanded(work))
+            guard let node = library.root?.children?.first(where: \.isFolder) else { Issue.record("no group"); return }
+            _ = library.rename(node, to: "Jobs")
+            #expect(library.isExpanded(folder.url.appending(path: "Jobs")))
+            library.setExpanded(folder.url.appending(path: "Jobs"), false)
+            #expect(!library.isExpanded(folder.url.appending(path: "Jobs")))
+        }
     }
 }
 

@@ -157,7 +157,10 @@ struct FileCommands: Commands {
             .disabled(uiState == nil)
 
             Button("New Sheet in Library") {
-                if let url = LibraryModel.shared.newSheet(), let document = store.openDocument(at: url) {
+                let library = LibraryModel.shared
+                if let folder = library.insertionFolder { library.setExpanded(folder, true) }
+                if let url = library.newSheet(in: library.insertionFolder) ?? library.newSheet(),
+                   let document = store.openDocument(at: url) {
                     store.show(document)
                 }
             }

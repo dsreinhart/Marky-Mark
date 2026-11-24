@@ -52,13 +52,23 @@ struct PadLibraryView: View {
                 searchResults
             } else if let root = library.root {
                 Section {
-                    OutlineGroup(root.children ?? [], children: \.children) { node in
-                        row(node)
+                    LibraryTree(nodes: root.children ?? [], row: { row($0) }, onDrop: drop)
+                    // After the last row: drops here go to the top level of the library. Only on
+                    // iPad: on iPhone a blank row would break the rounded list card (the header
+                    // and Move To still reach the top level).
+                    if PadPlatform.isPad {
+                        LibraryDropTarget(folder: root.url, highlights: true, onDrop: drop) {
+                            Color.clear.frame(height: 28)
+                        }
+                        .listRowBackground(Color.clear)
+                        .accessibilityHidden(true)
                     }
                 } header: {
-                    HStack(spacing: 6) {
-                        Text(root.name)
-                        if library.isScanning { ProgressView().controlSize(.mini) }
+                    LibraryDropTarget(folder: root.url, highlights: true, onDrop: drop) {
+                        HStack(spacing: 6) {
+                            Text(root.name)
+                            if library.isScanning { ProgressView().controlSize(.mini) }
+                        }
                     }
                 }
                 if !library.tagTree.isEmpty { tagSection }
@@ -109,6 +119,8 @@ struct PadLibraryView: View {
             Button("Create") {
                 if !library.newGroup(in: newGroupFolder, named: newGroupName) {
                     errorMessage = "Couldn't create the group \u{201C}\(newGroupName)\u{201D}."
+                } else if let folder = newGroupFolder {
+                    library.setExpanded(folder, true)
                 }
                 newGroupName = ""
             }
@@ -199,6 +211,7 @@ struct PadLibraryView: View {
             } icon: {
                 Image(systemName: "folder").foregroundStyle(Color.accentColor)
             }
+            .draggable(node.url)
             .contextMenu { folderMenu(node) }
         } else {
             Button {
@@ -221,6 +234,7 @@ struct PadLibraryView: View {
                 }
             }
             .listRowBackground(isCurrent(node.url) ? Color.accentColor.opacity(0.18) : nil)
+            .draggable(node.url)
             .contextMenu { fileMenu(node) }
         }
     }
@@ -253,8 +267,28 @@ struct PadLibraryView: View {
             Button("Open in New Window", systemImage: "macwindow.badge.plus") { onOpenInNewWindow(node.url) }
         }
         Button("Rename\u{2026}", systemImage: "pencil") { startRename(node) }
+        moveMenu(node)
         Divider()
         Button("Delete\u{2026}", systemImage: "trash", role: .destructive) { deleteTarget = node }
+    }
+
+    /// "Move To" with the top level and every group, for moving without dragging.
+    @ViewBuilder
+    private func moveMenu(_ node: LibraryNode) -> some View {
+        let destinations = library.moveDestinations(for: node.url)
+        if !destinations.isEmpty {
+            Menu {
+                ForEach(destinations, id: \.url) { destination in
+                    Button {
+                        _ = drop([node.url], into: destination.url)
+                    } label: {
+                        Label(destination.name, systemImage: destination.depth == 0 ? "books.vertical" : "folder")
+                    }
+                }
+            } label: {
+                Label("Move To", systemImage: "folder")
+            }
+        }
     }
 
     @ViewBuilder
@@ -265,6 +299,7 @@ struct PadLibraryView: View {
             showNewGroup = true
         }
         Button("Rename\u{2026}", systemImage: "pencil") { startRename(node) }
+        moveMenu(node)
         Divider()
         Button("Delete\u{2026}", systemImage: "trash", role: .destructive) { deleteTarget = node }
     }
@@ -273,14 +308,14 @@ struct PadLibraryView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
-                createSheet(in: nil)
+                createSheet(in: insertionFolder)
             } label: {
-                Label("New Sheet", systemImage: "square.and.pencil")
+                Label(newItemTitle("New Sheet"), systemImage: "square.and.pencil")
             }
             Menu {
-                Button("New Sheet", systemImage: "square.and.pencil") { createSheet(in: nil) }
-                Button("New Group\u{2026}", systemImage: "folder.badge.plus") {
-                    newGroupFolder = nil
+                Button(newItemTitle("New Sheet"), systemImage: "square.and.pencil") { createSheet(in: insertionFolder) }
+                Button(newItemTitle("New Group") + "\u{2026}", systemImage: "folder.badge.plus") {
+                    newGroupFolder = insertionFolder
                     showNewGroup = true
                 }
                 .disabled(library.folderURL == nil)
@@ -313,7 +348,43 @@ struct PadLibraryView: View {
 
     // MARK: - Actions
 
+    /// Where New Sheet and New Group put things: the group holding the sheet on screen, or the
+    /// top level when that sheet is at the top level or outside the library.
+    private var insertionFolder: URL? {
+        guard let currentURL, library.contains(currentURL), let root = library.root else { return nil }
+        let folder = currentURL.deletingLastPathComponent()
+        return Document.stablePath(folder) == Document.stablePath(root.url) ? nil : folder
+    }
+
+    /// "New Sheet" at the top level, "New Sheet in “Work”" inside a group.
+    private func newItemTitle(_ base: String) -> String {
+        guard let folder = insertionFolder else { return base }
+        return base + " in \u{201C}\(folder.lastPathComponent)\u{201D}"
+    }
+
+    /// Moves sheets or groups dragged within the library into `folder`.
+    private func drop(_ urls: [URL], into folder: URL) -> Bool {
+        let items = urls.filter { library.contains($0) }
+        guard !items.isEmpty else { return false }
+        var moved = false
+        for url in items {
+            // Unsaved typing goes to the file first, so it moves with it.
+            for document in documents.openDocuments where document.fileURL.map({
+                Document.stablePath($0) == Document.stablePath(url) || Document.stablePath($0).hasPrefix(Document.stablePath(url) + "/")
+            }) == true {
+                document.autosaveNow()
+            }
+            do {
+                if try library.move(url, into: folder, onMoved: { documents.filesMoved(from: $0, to: $1) }) != nil { moved = true }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+        return moved
+    }
+
     private func createSheet(in folder: URL?) {
+        if let folder { library.setExpanded(folder, true) }
         guard let url = documents.newDocumentURL(in: folder) else {
             errorMessage = "Couldn't create a new sheet there."
             return

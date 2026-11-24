@@ -16,6 +16,8 @@ final class PadDocuments {
 
     /// Open documents by `Document.stablePath`.
     private var open: [String: Document] = [:]
+    /// Documents currently open in any window.
+    var openDocuments: [Document] { Array(open.values) }
     /// Files opened from Files or elsewhere outside the library, newest first.
     private(set) var recents: [URL] = []
     @ObservationIgnored private var recentBookmarks: [String: Data] = [:]
