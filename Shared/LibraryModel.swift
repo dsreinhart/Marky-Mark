@@ -264,6 +264,8 @@ final class LibraryModel {
                 let modified = values?.contentModificationDate ?? .distantPast
                 if values?.isDirectory == true {
                     let group = scan(item, depth: depth + 1)
+                    // A sheet's picture folder ("Trip-images") isn't a group: hide it unless it holds sheets.
+                    if group.name.hasSuffix("-images"), group.allFiles.isEmpty { continue }
                     children.append(group)
                 } else if markdownExtensions.contains(item.pathExtension.lowercased()) {
                     let text = (try? TextFileFormat.read(from: item).text) ?? ""
@@ -475,8 +477,8 @@ final class LibraryModel {
         }
     }
 
-    /// Where `url` could be moved: the top level and every group, minus its own folder, itself,
-    /// anything inside it and picture folders. `depth` indents the group's name in a menu.
+    /// Where `url` could be moved: the top level and every group, minus its own folder, itself
+    /// and anything inside it. Picture folders aren't in the tree, so they aren't offered. `depth` indents the group's name in a menu.
     func moveDestinations(for url: URL) -> [(url: URL, name: String, depth: Int)] {
         guard let root else { return [] }
         let path = Document.stablePath(url), parent = Document.stablePath(url.deletingLastPathComponent())
@@ -484,8 +486,6 @@ final class LibraryModel {
         func walk(_ node: LibraryNode, depth: Int) {
             let nodePath = Document.stablePath(node.url)
             if nodePath == path || nodePath.hasPrefix(path + "/") { return }
-            // Picture folders ("Name-images") hold a sheet's pictures, not sheets.
-            if depth > 0, node.name.hasSuffix("-images") { return }
             if nodePath != parent { result.append((node.url, depth == 0 ? "Top Level" : node.name, depth)) }
             for child in node.children ?? [] where child.isFolder { walk(child, depth: depth + 1) }
         }

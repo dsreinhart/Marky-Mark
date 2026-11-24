@@ -794,6 +794,20 @@ extension FileHandling {
 
         private func names() -> [String] { library.root?.allFiles.map(\.name) ?? [] }
 
+        @Test func pictureFoldersAreHiddenButGroupsNamedLikeThemAreNot() async {
+            let folder = TempFolder()
+            folder.write("![p](Trip-images/p-20261124-101500.jpg)", to: "Trip.md")
+            folder.write("jpg", to: "Trip-images/p-20261124-101500.jpg")
+            folder.write("x", to: "Work/Plan.md")
+            folder.write("jpg", to: "Work/Plan-images/q.jpg")
+            folder.write("a sheet", to: "Old-images/Notes.md")
+            await open(folder)
+            let top = library.root?.children?.map(\.name) ?? []
+            #expect(top == ["Old-images", "Work", "Trip"], "picture folders hidden; a group of sheets named -images stays")
+            let work = library.root?.children?.first { $0.name == "Work" }
+            #expect(work?.children?.map(\.name) == ["Plan"], "nested picture folders are hidden too")
+        }
+
         @Test func scanFindsSheetsAndGroups() async {
             let folder = TempFolder()
             folder.write("# One\n\ntwo three", to: "One.md")
