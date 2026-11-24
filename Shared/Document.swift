@@ -205,6 +205,7 @@ final class Document: Identifiable {
             hasUnsavedChanges = false
             reportedOtherText = nil
             lastSeenFileDate = Self.fileDate(of: url)
+            Diagnostics.log("sync: saved \(url.lastPathComponent)")
             if LibraryModel.shared.contains(url) { LibraryModel.shared.scheduleRefresh() }
             if let overwritten { onExternalConflict?(self, overwritten) }
             return true
@@ -244,6 +245,29 @@ final class Document: Identifiable {
         try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
+    /// When this device last asked iCloud for a newer version, so a slow download isn't asked for
+    /// again every few seconds.
+    @ObservationIgnored private var lastDownloadRequest: Date? = nil
+
+    /// Asks iCloud for the newest version of a file it says is out of date here. The system
+    /// updates files on its own schedule, which on an iPhone or iPad can be minutes; asking makes
+    /// it fetch now, and the next check sees the new date. Nothing happens outside iCloud.
+    private func requestNewerVersionIfAny(_ url: URL) {
+        var fresh = url
+        fresh.removeAllCachedResourceValues()
+        guard let values = try? fresh.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+              values.isUbiquitousItem == true,
+              let status = values.ubiquitousItemDownloadingStatus, status != .current else { return }
+        if let last = lastDownloadRequest, Date().timeIntervalSince(last) < 30 { return }
+        lastDownloadRequest = Date()
+        do {
+            try FileManager.default.startDownloadingUbiquitousItem(at: fresh)
+            Diagnostics.log("sync: asked iCloud for newer \(fresh.lastPathComponent) (status \(status.rawValue))")
+        } catch {
+            Diagnostics.log("sync: download request for \(fresh.lastPathComponent) failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Looks for changes made to the file by another device or app, such as the iPad through iCloud Drive.
     @discardableResult
     func checkForExternalChange() -> ExternalChange {
@@ -257,11 +281,13 @@ final class Document: Identifiable {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
 
+        requestNewerVersionIfAny(url)
         let date = Self.fileDate(of: url)
         guard date != lastSeenFileDate else { return .none }
         guard let (onDisk, format) = try? TextFileIO.read(url) else { return .none }
         lastSeenFileDate = date
         if onDisk == lastSavedText || onDisk == reportedOtherText { return .none }
+        let modified = date.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
         if onDisk == text {
             // Both sides arrived at the same text.
             lastSavedText = onDisk
@@ -272,12 +298,14 @@ final class Document: Identifiable {
             snapshot(onDisk)
             reportedOtherText = onDisk
             onExternalConflict?(self, onDisk)
+            Diagnostics.log("sync: conflict in \(url.lastPathComponent), file modified \(modified)")
             return .conflict
         }
         snapshot(lastSavedText)
         text = onDisk
         lastSavedText = onDisk
         fileFormat = format
+        Diagnostics.log("sync: reloaded \(url.lastPathComponent), file modified \(modified)")
         return .reloaded
     }
 

@@ -176,11 +176,13 @@ struct ContentView: View {
             .frame(width: 270)
     }
 
-    /// Changes from another device can arrive while the app stays in front.
+    /// Changes from another device show within a few seconds, also while another app is in front:
+    /// the window is often on screen beside the device being typed on. A check only reads the file's
+    /// date and iCloud status, and reads the text only when that changed.
     private func watchForExternalChanges() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(5))
-            if NSApp.isActive { document.checkForExternalChange() }
+            document.checkForExternalChange()
         }
     }
 

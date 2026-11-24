@@ -605,10 +605,12 @@ struct PadDocumentView: View {
     }
 
     /// Changes from another device can arrive while the app stays in front.
+    /// Looks at once when the sheet is shown (on iPhone, coming back from the library), then
+    /// every 5 seconds while the app is in front.
     private func watchForExternalChanges() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(5))
             if UIApplication.shared.applicationState == .active { document.checkForExternalChange() }
+            try? await Task.sleep(for: .seconds(5))
         }
     }
 
