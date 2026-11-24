@@ -165,6 +165,28 @@ final class PadRichCoordinator: NSObject {
         parent.sync?.resync()
     }
 
+    /// Lays the tables out again for a text column `textWidth` wide (a rotation, a phone, the
+    /// sidebar). Only their tab stops change, so the text and the undo history are untouched.
+    func refitTables(textWidth: CGFloat) {
+        guard let storage, textWidth > 50 else { return }
+        if let current = engine.tableTextWidth, abs(current - textWidth) < 1 { return }
+        engine.tableTextWidth = textWidth
+        var changes: [(NSRange, NSParagraphStyle)] = []
+        storage.enumerateAttribute(.mmRawTable, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard value != nil,
+                  let old = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return }
+            let new = engine.tableParagraphStyle(columns: old.tabStops.count + 1, width: engine.tableWidth)
+            if new.tabStops != old.tabStops { changes.append((range, new)) }
+        }
+        guard !changes.isEmpty else { return }
+        let wasLoading = isLoading
+        isLoading = true
+        storage.beginEditing()
+        for (range, style) in changes { storage.addAttribute(.paragraphStyle, value: style, range: range) }
+        storage.endEditing()
+        isLoading = wasLoading
+    }
+
     func restyleAll() {
         guard let textView, let storage else { return }
         directEdits = true

@@ -295,6 +295,15 @@ final class StyleEngine {
     /// Space between a heading and the divider drawn under it.
     static let headingRuleGap: CGFloat = 6
 
+    /// The width of the text column on screen, once the editor knows it. Tables are laid out to
+    /// fit it, so the columns of a table on a phone stay on one line.
+    var tableTextWidth: CGFloat? = nil
+
+    /// The width a table's columns share: the column's width setting, capped by the room on screen.
+    var tableWidth: CGFloat {
+        min(max(style.maxWidth, 400), 720, tableTextWidth ?? .infinity) - 16
+    }
+
     /// A table shown in tab-separated columns, one every so many points.
     func tableParagraphStyle(columns: Int, width: CGFloat) -> NSParagraphStyle {
         let ps = NSMutableParagraphStyle()

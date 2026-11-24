@@ -255,7 +255,7 @@ struct MarkdownRenderer {
         let source = markdown ?? ([line(headers), "|" + String(repeating: " --- |", count: columns)] + rows.map(line))
             .joined(separator: "\n")
         let block = BlockInfo(.tableCell)
-        let ps = engine.tableParagraphStyle(columns: columns, width: min(max(engine.style.maxWidth, 400), 720) - 16)
+        let ps = engine.tableParagraphStyle(columns: columns, width: engine.tableWidth)
         let content = NSMutableAttributedString()
         for (rowIndex, row) in allRows.enumerated() {
             if rowIndex > 0 {

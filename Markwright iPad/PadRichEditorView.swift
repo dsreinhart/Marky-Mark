@@ -20,6 +20,8 @@ struct PadRichEditorView: UIViewRepresentable {
     var focus: FocusMode = .off
     let controller: PadEditorController
     var sync: PadDualSync? = nil
+    /// The formatting bar above the keyboard, on a phone-width screen.
+    var keyboardAccessory: UIView? = nil
 
     func makeCoordinator() -> PadRichCoordinator {
         PadRichCoordinator(self)
@@ -47,6 +49,7 @@ struct PadRichEditorView: UIViewRepresentable {
         textView.layoutManager.allowsNonContiguousLayout = false
         textView.maxTextWidth = style.maxWidth
         textView.typewriter = typewriter
+        textView.inputAccessoryView = keyboardAccessory
         textView.richLayoutManager?.engine = coordinator.engine
         apply(appearanceTo: textView)
 
@@ -85,6 +88,7 @@ struct PadRichEditorView: UIViewRepresentable {
             controller.rich = coordinator
         }
         if sync?.rich !== coordinator { sync?.rich = coordinator }
+        textView.setKeyboardAccessory(keyboardAccessory)
         coordinator.applyBehaviors()
     }
 
@@ -201,6 +205,7 @@ final class PadRichTextView: UITextView {
         super.layoutSubviews()
         if abs(bounds.width - lastWidth) > 1 {
             lastWidth = bounds.width
+            coordinator?.refitTables(textWidth: bounds.width - inset.left - inset.right - 2 * textContainer.lineFragmentPadding)
             coordinator?.rescaleImages()
         }
         if abs(contentSize.height - lastContentHeight) > 0.5 {

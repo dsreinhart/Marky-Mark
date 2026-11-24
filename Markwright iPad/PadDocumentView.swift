@@ -3,7 +3,9 @@
 //  Markwright iPad
 //
 //  One document: the Raw (Markdown source) and Formatted editors, alone or side by side
-//  (Dual), with the formatting toolbar, the dashboard and the More menu.
+//  (Dual), with the formatting toolbar, the dashboard and the More menu. At a compact width
+//  (iPhone, or a narrow iPad window) there is no Dual, the formatting toolbar rides on the
+//  keyboard, the status line steps aside while typing and the dashboard is in More.
 //
 
 import SwiftUI
@@ -17,9 +19,10 @@ struct PadDocumentView: View {
     /// Shows another file in this window (a wiki link).
     let onOpenFile: (URL) -> Void
     let onQuickOpen: () -> Void
-    /// The library column is hidden: the window shows a button to bring it back.
-    var libraryHidden = false
-    var onShowLibrary: () -> Void = {}
+    /// Whether the sheet shows a Library button: on iPad while the library is hidden (to bring it
+    /// back), on a wide iPhone always (to show and hide it; the system's own button is removed there).
+    var showsLibraryButton = false
+    var onToggleLibrary: () -> Void = {}
     private var fileURL: URL? { document.fileURL }
 
     /// Raw, Dual and Formatted, as on the Mac. The stored names are the ones from before the
@@ -57,25 +60,37 @@ struct PadDocumentView: View {
     @State private var conflictText: String? = nil
     /// A `[[wiki link]]` to a sheet that doesn't exist yet.
     @State private var missingLink: String? = nil
+    /// The formatting toolbar as the editors' keyboard accessory, at a compact width.
+    @State private var keyboardBar: PadKeyboardBar? = nil
+    @State private var keyboardShown = false
+    /// The dashboard as a sheet on a phone; not remembered, so it doesn't open with every sheet.
+    @State private var showDashboardSheet = false
     private var theme = ThemeSettings.shared
 
     init(document: Document, isComposing: Binding<Bool>, onOpenFile: @escaping (URL) -> Void, onQuickOpen: @escaping () -> Void,
-         libraryHidden: Bool = false, onShowLibrary: @escaping () -> Void = {}) {
+         showsLibraryButton: Bool = false, onToggleLibrary: @escaping () -> Void = {}) {
         self.document = document
         _isComposing = isComposing
         self.onOpenFile = onOpenFile
         self.onQuickOpen = onQuickOpen
-        self.libraryHidden = libraryHidden
-        self.onShowLibrary = onShowLibrary
+        self.showsLibraryButton = showsLibraryButton
+        self.onToggleLibrary = onToggleLibrary
     }
 
     private var layout: Layout {
         get { Layout(rawValue: layoutRaw) ?? .split }
     }
 
-    /// Dual needs room; in a compact width fall back to Raw.
+    private var isCompact: Bool { sizeClass == .compact }
+
+    /// Dual needs room; in a compact width it shows Formatted.
     private var effectiveLayout: Layout {
-        sizeClass == .compact && layout == .split ? .editor : layout
+        isCompact && layout == .split ? .preview : layout
+    }
+
+    /// The bar above the keyboard, when the toolbar isn't shown under the title.
+    private var keyboardAccessory: UIView? {
+        isCompact && !isComposing ? keyboardBar?.view : nil
     }
 
     private var focusMode: FocusMode { FocusMode(rawValue: focusRaw) ?? .off }
@@ -96,22 +111,55 @@ struct PadDocumentView: View {
             presentingSheets(handlingImages(withAlerts(windowContent)))
         }
         // Outside the navigation stack, so the window keeps its title and sidebar button.
-        .inspector(isPresented: Binding(get: { showDashboard && !isComposing }, set: { showDashboard = $0 })) {
-            DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
-                          onJumpToHeading: { controller.goToHeading($0) },
-                          onOpenWikiLink: { target in openWikiLink(target) },
-                          onJumpToTag: { tag in controller.goToText("#" + tag) })
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+        // The inspector's content takes part in the layout even while it's closed, so at a
+        // compact width it's empty: a title or toolbar in it would land on the document's bar.
+        .inspector(isPresented: Binding(get: { showDashboard && !isComposing && !isCompact }, set: { showDashboard = $0 })) {
+            if !isCompact {
+                dashboard
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+            }
         }
+        .sheet(isPresented: Binding(get: { showDashboardSheet && isCompact }, set: { showDashboardSheet = $0 })) {
+            dashboardSheet
+        }
+    }
+
+    /// Beside the document on iPad; on a phone a sheet (`dashboardSheet`) that closes when it
+    /// jumps to a place in the text.
+    private var dashboard: some View {
+        DashboardView(text: $document.text, goalKey: goalKey, fileURL: fileURL,
+                      onJumpToHeading: { heading in leaveDashboard { controller.goToHeading(heading) } },
+                      onOpenWikiLink: { target in leaveDashboard { openWikiLink(target) } },
+                      onJumpToTag: { tag in leaveDashboard { controller.goToText("#" + tag) } })
+    }
+
+    /// The dashboard on a phone: half height to start, so the text shows above it.
+    private var dashboardSheet: some View {
+        NavigationStack {
+            dashboard
+                .navigationTitle("Dashboard")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showDashboardSheet = false }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// On a phone the dashboard covers the text, so it closes before showing the place.
+    private func leaveDashboard(_ action: @escaping () -> Void) {
+        guard isCompact else { return action() }
+        showDashboardSheet = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
     }
 
     /// The toolbar strip, the editors and the status bar, with the window's title and toolbar.
     private var windowContent: some View {
         VStack(spacing: 0) {
-            if !isComposing {
-                PadFormattingToolbar(controller: controller,
-                                     onPickPhoto: { showPhotoPicker = true },
-                                     onPickFile: { showFilePicker = true })
+            if !isComposing && !isCompact {
+                formattingToolbar(inKeyboard: false)
                 Divider()
             }
             HStack(spacing: 0) {
@@ -125,10 +173,16 @@ struct PadDocumentView: View {
                     formatted
                 }
             }
-            if !isComposing {
+            if !isComposing && !(isCompact && keyboardShown) {
                 Divider()
                 statusBar
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardShown = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardShown = false
         }
         .overlay(alignment: .topTrailing) {
             if isComposing {
@@ -167,7 +221,7 @@ struct PadDocumentView: View {
             exportPreview: { showExportPreview = true },
             print: { printDocument() },
             toggleComposition: { isComposing.toggle() },
-            toggleDashboard: { showDashboard.toggle() },
+            toggleDashboard: { if isCompact { showDashboardSheet.toggle() } else { showDashboard.toggle() } },
             toggleTypewriter: { typewriter.toggle() },
             showHelp: { showHelp = true },
             showSettings: { showSettings = true },
@@ -177,6 +231,7 @@ struct PadDocumentView: View {
             controller.setPanes(raw: layout != .preview, formatted: layout != .editor)
         }
         .onAppear {
+            if keyboardBar == nil { keyboardBar = PadKeyboardBar(toolbar: formattingToolbar(inKeyboard: true)) }
             document.onExternalConflict = { _, other in conflictText = other }
             controller.openWikiLink = { target in openWikiLink(target) }
             controller.pasteImage = { data, type in insertImage(data: data, name: "pasted", type: type) }
@@ -263,7 +318,7 @@ struct PadDocumentView: View {
             Button("Embed in Text Instead") { embedPendingImage() }
             Button("Cancel", role: .cancel) { pendingImage = nil }
         } message: {
-            Text("iPadOS lets Markwright save images beside a document only after you allow its folder once. In the window that opens, check that it shows \(documentFolderName), then tap Open. Folders inside it are covered too.")
+            Text("\(PadPlatform.systemName) lets Markwright save images beside a document only after you allow its folder once. In the window that opens, check that it shows \(documentFolderName), then tap Open. Folders inside it are covered too.")
         }
         .alert("Allow \(documentFolderName) Instead?", isPresented: Binding(get: { wrongFolder != nil }, set: { if !$0 { wrongFolder = nil } })) {
             Button("Allow Access\u{2026}") {
@@ -312,6 +367,13 @@ struct PadDocumentView: View {
 
     // MARK: - Pieces
 
+    private func formattingToolbar(inKeyboard: Bool) -> PadFormattingToolbar {
+        PadFormattingToolbar(controller: controller,
+                             onPickPhoto: { showPhotoPicker = true },
+                             onPickFile: { showFilePicker = true },
+                             inKeyboard: inKeyboard)
+    }
+
     private var editor: some View {
         PadEditorView(
             text: $document.text,
@@ -323,7 +385,8 @@ struct PadDocumentView: View {
             // In Dual, Focus follows the cursor, which is only in one pane.
             focus: controller.isDual && controller.activePane != .raw ? .off : focusMode,
             controller: controller,
-            sync: controller.dualSync
+            sync: controller.dualSync,
+            keyboardAccessory: keyboardAccessory
         )
     }
 
@@ -335,7 +398,8 @@ struct PadDocumentView: View {
             typewriter: typewriter,
             focus: focusMode,
             controller: controller,
-            sync: controller.dualSync
+            sync: controller.dualSync,
+            keyboardAccessory: keyboardAccessory
         )
     }
 
@@ -376,34 +440,46 @@ struct PadDocumentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        if libraryHidden {
+        if showsLibraryButton {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: onShowLibrary) {
+                Button(action: onToggleLibrary) {
                     Label("Library", systemImage: "sidebar.left")
                 }
             }
         }
-        ToolbarItemGroup(placement: .primaryAction) {
-            Picker("Layout", selection: Binding(get: { layoutRaw }, set: { value in
+        // The layout switch has a glass capsule of its own; inside the group's shared background
+        // it drew a second, offset capsule. So it stands alone, then a gap, then the other buttons.
+        ToolbarItem(placement: .primaryAction) {
+            Picker("Layout", selection: Binding(get: { effectiveLayout.rawValue }, set: { value in
                 controller.layoutWillChange()
                 layoutRaw = value
             })) {
                 Label("Raw", systemImage: "chevron.left.forwardslash.chevron.right").tag(Layout.editor.rawValue)
-                if sizeClass != .compact {
+                if !isCompact {
                     Label("Dual", systemImage: "rectangle.split.2x1").tag(Layout.split.rawValue)
                 }
                 Label("Formatted", systemImage: "doc.richtext").tag(Layout.preview.rawValue)
             }
             .pickerStyle(.segmented)
             .fixedSize()
-
-            Button {
-                showDashboard.toggle()
-            } label: {
-                Label("Dashboard", systemImage: "sidebar.right")
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItemGroup(placement: .primaryAction) {
+            // On a phone the dashboard is in More, leaving the title room.
+            if !isCompact {
+                Button {
+                    showDashboard.toggle()
+                } label: {
+                    Label("Dashboard", systemImage: "sidebar.right")
+                }
             }
 
             Menu {
+                if isCompact {
+                    Button("Dashboard", systemImage: "chart.bar.doc.horizontal") { showDashboardSheet = true }
+                    Divider()
+                }
                 Toggle("Typewriter Scrolling", isOn: $typewriter)
                 Picker("Focus", systemImage: "scope", selection: $focusRaw) {
                     ForEach(FocusMode.allCases) { Text($0.label).tag($0.rawValue) }
@@ -460,8 +536,11 @@ struct PadDocumentView: View {
                     .monospacedDigit()
             }
             Text("\(stats.words.formatted()) words").foregroundStyle(.secondary).monospacedDigit()
-            Text("\(stats.characters.formatted()) chars").foregroundStyle(.tertiary).monospacedDigit()
-            if stats.readingMinutes > 0 {
+            // A phone has room for the words; characters and reading time are in the dashboard.
+            if !isCompact {
+                Text("\(stats.characters.formatted()) chars").foregroundStyle(.tertiary).monospacedDigit()
+            }
+            if stats.readingMinutes > 0, !isCompact {
                 Text("\(stats.readingMinutes) min read").foregroundStyle(.tertiary).monospacedDigit()
             }
         }
@@ -601,7 +680,7 @@ struct PadDocumentView: View {
         PadDiagnostics.log("folder window returned \(picked.path) for document folder \(folder.path)")
         if PadFolderAccess.grant(picked) == .refused {
             pendingImage = nil
-            showError("Image Not Added", "iPadOS didn't give Markwright access to \u{201C}\(picked.lastPathComponent)\u{201D}. Try again, or embed the image instead.")
+            showError("Image Not Added", "\(PadPlatform.systemName) didn't give Markwright access to \u{201C}\(picked.lastPathComponent)\u{201D}. Try again, or embed the image instead.")
             return
         }
         guard PadFolderAccess.grant(picked, covers: folder) else {

@@ -1,6 +1,6 @@
 # Markwright Help
 
-Welcome to Markwright, a Markdown editor for the Mac with a companion app for iPad. This guide covers everything the app does. It is itself a Markdown document, so what you see here is the formatted editor at work: click anywhere and type to try things out. Nothing you change here affects the original: close this tab and choose **Help > Markwright Help** to get a fresh copy.
+Welcome to Markwright, a Markdown editor for the Mac with a companion app for iPad and iPhone. This guide covers everything the app does. It is itself a Markdown document, so what you see here is the formatted editor at work: click anywhere and type to try things out. Nothing you change here affects the original: close this tab and choose **Help > Markwright Help** to get a fresh copy.
 
 > **Tip:** Switch between this guide and your own documents with the tab bar at the top of the window. Press **⌘?** at any time to bring the guide back.
 
@@ -110,7 +110,7 @@ In the formatted view lists behave as you would expect:
 
 macOS lets Markwright write beside a document only in your library folder or in a folder you have allowed. The first time, Markwright asks: click **Allow Access…**, check that the window shows the document's folder, and click Allow. Allowing a folder covers every folder inside it, and it is remembered. **Embed in Text Instead** puts the picture in the Markdown itself, and so does a picture added to an untitled document. Images show inline at their natural size, left-aligned, shrunk to fit the column. In the raw editor the command inserts an image placeholder for you to fill in.
 
-To resize a picture in the formatted view, click it (tap it on iPad) to select it, then drag one of the handles at its corners. A badge shows the width as you drag, and when you let go it's written after the picture as a percentage of the column, such as `{width=40%}`. Undo puts the old size back. Click elsewhere in the text to deselect it; while a picture is selected, Delete removes it.
+To resize a picture in the formatted view, click it (tap it on iPad or iPhone) to select it, then drag one of the handles at its corners. A badge shows the width as you drag, and when you let go it's written after the picture as a percentage of the column, such as `{width=40%}`. Undo puts the old size back. Click elsewhere in the text to deselect it; while a picture is selected, Delete removes it.
 
 You can also type a width straight after a picture in the raw editor:
 
@@ -355,7 +355,7 @@ All of these work in every view and are remembered between launches.
 - **Typography**: the body text size, with a live preview of headings, quotes and code.
 - **Files**: the default app for Markdown files (section 4).
 
-Settings apply to every window immediately. The iPad app has the same settings screen of its own.
+Settings apply to every window immediately. The iPad and iPhone app has the same settings screen of its own.
 
 ---
 
@@ -420,13 +420,13 @@ Images stored on your Mac are embedded in HTML, PDF and Word output (HTML and PD
 
 ---
 
-## 12. Markwright for iPad
+## 12. Markwright for iPad and iPhone
 
-The iPad app edits the same plain Markdown files as the Mac. Point it at the folder your Mac uses as its library, for example one in iCloud Drive, and both see the same sheets.
+The iPad and iPhone app edits the same plain Markdown files as the Mac. It is one app: everything below applies to both, and **On iPhone** at the end lists what a phone-width screen changes. Point it at the folder your Mac uses as its library, for example one in iCloud Drive, and both see the same sheets.
 
 ### The library and opening documents
 
-Each window shows the **library** in a sidebar beside the sheet you are editing. The first time, tap **Choose Folder…** and pick a folder: its Markdown files become sheets and its subfolders groups, as on the Mac (section 5). iPadOS remembers the folder, so this is needed only once. Sheets still in iCloud are downloaded when the library lists them.
+Each window shows the **library** in a sidebar beside the sheet you are editing. The first time, tap **Choose Folder…** and pick a folder: its Markdown files become sheets and its subfolders groups, as on the Mac (section 5). The app remembers the folder, so this is needed only once. Sheets still in iCloud are downloaded when the library lists them.
 
 - Tap a sheet to show it. Hide or show the sidebar with the sidebar button at the top left, or **⌥⌘L**.
 - The search field matches sheet names, tags and the text inside every sheet; tapping a result opens the sheet at the match. The **Tags** section lists every tag; tap one to show only its sheets.
@@ -455,18 +455,29 @@ In the formatted view, put the cursor on a heading and tap the fold button at th
 
 ### The toolbar
 
-The strip above the editors works on whichever pane has the cursor. In the formatted view it formats the text and lights up what's on at the cursor; a link asks for its address, a wiki link for the sheet's name. In Raw it inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. In the formatted view it also has outdent, indent and fold. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. iPadOS requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so the library folder you chose already covers the documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
+The strip above the editors works on whichever pane has the cursor. In the formatted view it formats the text and lights up what's on at the cursor; a link asks for its address, a wiki link for the sheet's name. In Raw it inserts Markdown around the selection, or removes it when it's already there: the paragraph style menu, bold, italic, strikethrough, inline code, highlight, link, wiki link and footnote; bulleted, numbered and task lists; blockquote, code block and comment; horizontal rule, table and image. In the formatted view it also has outdent, indent and fold. The image button picks from your photo library or from Files. A picked image is saved beside the document, in a folder named after it. The system requires you to allow that folder once: tap **Allow Access…**, check that the window shows the document's folder, and tap Open. Allowing a folder also covers every folder inside it, so the library folder you chose already covers the documents in it. When you rename a document, here or in Files, its pictures move to a folder with the new name the next time it's open, and its links are updated; pictures that another document in the same folder also uses stay where they are. If you'd rather not, the image is embedded in the text instead.
 
 ### The More menu
 
 - **Typewriter Scrolling** keeps the line you are typing in the middle of the screen.
 - **Focus** dims everything except the current **Paragraph** or **Sentence**, in either view. In Dual it follows the cursor.
 - **Composition Mode** hides the toolbars, the sidebar, the dashboard and the status bar, and narrows the text column, so only your writing is left. Tap **Exit Composition** at the top right, or press Escape, to come back.
-- **Save a Version** keeps a copy of the text as it is now. **Revert To** lists **Last Opened** (the text when you opened the sheet) and every saved version by date; reverting keeps what you leave as a version too. Markwright also saves a version every few minutes while you work, up to fifty per sheet. Versions are kept on this iPad, separately from the Mac's.
+- **Save a Version** keeps a copy of the text as it is now. **Revert To** lists **Last Opened** (the text when you opened the sheet) and every saved version by date; reverting keeps what you leave as a version too. Markwright also saves a version every few minutes while you work, up to fifty per sheet. Versions are kept on this device, separately from the Mac's.
 - **Export Preview…** shows the document in the export styles (section 10). From there, or straight from the menu, share it as HTML, PDF, Word or RTF, or print it. Images saved beside the document are embedded. A Word document has Word's own heading, list and table formatting, the pictures, links and footnotes; pictures on the web are fetched first.
 - **Quick Open…**, **Markwright Help**, the **Markdown Cheat Sheet** and **Settings…**, which has the same themes, fonts and colors as the Mac.
 
 The **Dashboard** button opens the outline, statistics, writing goal, tags and links of section 7. Tap a heading to jump to it, or a wiki link to open the sheet it names.
+
+### On iPhone
+
+The iPhone has the same features in less room, so a few things move:
+
+- The **library** is the first screen. Tap a sheet to open it full screen; the back button at the top left returns to the library.
+- The layout control switches between **Raw** and **Formatted**. Dual needs a wide screen, so it appears only where there is room, such as landscape on the largest iPhones; elsewhere a saved Dual choice shows Formatted.
+- The **formatting toolbar** sits on top of the keyboard while you type, and the button at its right end puts the keyboard away. With the keyboard down, the whole screen is your document.
+- The **Dashboard** is in the **More** menu and opens as a sheet. The status line shows the word count and your goal, and steps aside while the keyboard is up.
+- **Open in New Window** isn't offered, since the iPhone shows one window.
+- The app turns to landscape for wider lines and tables.
 
 ### Keyboard shortcuts
 

@@ -84,7 +84,7 @@ struct PadLibraryView: View {
                 showFolderPicker = false
                 guard let folder else { return }
                 if PadFolderAccess.grant(folder) == .refused {
-                    errorMessage = "iPadOS didn't give Markwright access to \u{201C}\(folder.lastPathComponent)\u{201D}. Try again."
+                    errorMessage = "\(PadPlatform.systemName) didn't give Markwright access to \u{201C}\(folder.lastPathComponent)\u{201D}. Try again."
                     return
                 }
                 library.setFolder(folder)
@@ -119,7 +119,7 @@ struct PadLibraryView: View {
             Button("Delete", role: .destructive) { deleteNow() }
             Button("Cancel", role: .cancel) { deleteTarget = nil }
         } message: {
-            Text("It moves to Recently Deleted in the Files app where iPadOS allows it; otherwise it's removed for good.")
+            Text("It moves to Recently Deleted in the Files app where \(PadPlatform.systemName) allows it; otherwise it's removed for good.")
         }
         .alert("Couldn't Do That", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -240,14 +240,18 @@ struct PadLibraryView: View {
         }
         .listRowBackground(isCurrent(url) ? Color.accentColor.opacity(0.18) : nil)
         .contextMenu {
-            Button("Open in New Window", systemImage: "macwindow.badge.plus") { onOpenInNewWindow(url) }
+            if PadPlatform.supportsWindows {
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") { onOpenInNewWindow(url) }
+            }
             Button("Remove from List", systemImage: "minus.circle") { documents.forgetRecent(url) }
         }
     }
 
     @ViewBuilder
     private func fileMenu(_ node: LibraryNode) -> some View {
-        Button("Open in New Window", systemImage: "macwindow.badge.plus") { onOpenInNewWindow(node.url) }
+        if PadPlatform.supportsWindows {
+            Button("Open in New Window", systemImage: "macwindow.badge.plus") { onOpenInNewWindow(node.url) }
+        }
         Button("Rename\u{2026}", systemImage: "pencil") { startRename(node) }
         Divider()
         Button("Delete\u{2026}", systemImage: "trash", role: .destructive) { deleteTarget = node }

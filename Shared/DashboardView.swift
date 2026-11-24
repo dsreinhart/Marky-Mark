@@ -293,7 +293,11 @@ struct DashboardView: View {
 
     private var tagHelp: String {
         var parts: [String] = []
+        #if os(iOS)
+        if onJumpToTag != nil { parts.append("Tap a #tag to jump to it in the text.") }
+        #else
         if onJumpToTag != nil { parts.append("Click a #tag to jump to it in the text.") }
+        #endif
         if onSelectTag != nil { parts.append(onJumpToTag == nil ? "Click a tag to filter the library by it." : "Click a keyword, or right-click a #tag, to filter the library by it.") }
         parts.append("Keywords are stored as `tags` in the front matter; `#tags` typed in the text count too.")
         return parts.joined(separator: " ")

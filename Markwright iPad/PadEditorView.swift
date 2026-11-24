@@ -20,6 +20,8 @@ struct PadEditorView: UIViewRepresentable {
     var focus: FocusMode = .off
     let controller: PadEditorController
     var sync: PadDualSync? = nil
+    /// The formatting bar above the keyboard, on a phone-width screen.
+    var keyboardAccessory: UIView? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -40,6 +42,7 @@ struct PadEditorView: UIViewRepresentable {
         textView.keyboardDismissMode = .interactive
         textView.maxWidth = maxWidth
         textView.typewriter = typewriter
+        textView.inputAccessoryView = keyboardAccessory
         textView.text = text
         apply(appearanceTo: textView)
         context.coordinator.highlight(textView)
@@ -74,6 +77,7 @@ struct PadEditorView: UIViewRepresentable {
         }
         if sync?.raw !== textView { sync?.raw = textView }
         if controller.textView !== textView { controller.textView = textView }
+        textView.setKeyboardAccessory(keyboardAccessory)
         apply(appearanceTo: textView)
         if textView.text != text {
             // In Dual, while the cursor is in the formatted pane, wait for a pause in its typing.

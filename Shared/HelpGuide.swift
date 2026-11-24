@@ -2,7 +2,7 @@
 //  HelpGuide.swift
 //  Markwright
 //
-//  The bundled user guide. On iPad the Mac-specific opening is replaced and the iPad section
+//  The bundled user guide. On iPad and iPhone the Mac-specific opening is replaced and their section
 //  is moved to the front, since the rest of the guide describes the Mac app.
 //
 
@@ -10,7 +10,7 @@ import Foundation
 
 enum HelpGuide {
     static let padIntroduction = """
-    Welcome to Markwright on iPad. This guide covers both the iPad app and the Mac app it comes with. The first section is about the iPad; the numbered sections after it describe the Mac, and most of what they say about writing Markdown applies here too.
+    Welcome to Markwright on iPad and iPhone. This guide covers both this app and the Mac app it comes with. The first section is about the iPad and iPhone; the numbered sections after it describe the Mac, and most of what they say about writing Markdown applies here too.
 
     > **Tip:** Tap **Done** to go back to your document. The guide is always in the **More** menu.
     """
@@ -28,7 +28,7 @@ enum HelpGuide {
         guard padStart > firstRule else { return guide }
         var section = Array(lines[padStart..<padEnd])
         // Drop the section number and the rule that closes it, since it moves to the front.
-        section[0] = "## Markwright for iPad"
+        section[0] = "## Markwright for iPad and iPhone"
         while let last = section.last, last.isEmpty || last == "---" { section.removeLast() }
         var rest = Array(lines[(firstRule + 1)..<padStart]) + Array(lines[padEnd...])
         while let first = rest.first, first.isEmpty { rest.removeFirst() }

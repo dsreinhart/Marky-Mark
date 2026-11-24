@@ -23,10 +23,10 @@ struct PadGuideTests {
         let adapted = HelpGuide.adaptedForPad(original)
         #expect(adapted != original)
         #expect(!adapted.contains("close this tab"))
-        #expect(adapted.contains("Welcome to Markwright on iPad"))
+        #expect(adapted.contains("Welcome to Markwright on iPad and iPhone"))
         let lines = adapted.components(separatedBy: "\n")
         let headings = lines.filter { $0.hasPrefix("## ") }
-        #expect(headings.first == "## Markwright for iPad")
+        #expect(headings.first == "## Markwright for iPad and iPhone")
         #expect(headings.dropFirst().first?.hasPrefix("## 1.") == true)
         #expect(headings.filter { $0.contains("Markwright for iPad") }.count == 1)
         // Everything else survives: same number of sections and the footnote definition.

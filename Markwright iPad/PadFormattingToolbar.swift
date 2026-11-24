@@ -3,7 +3,8 @@
 //  Markwright iPad
 //
 //  The formatting strip above the editors. In the formatted pane it formats the text and shows
-//  what's on at the cursor; in the raw pane it inserts Markdown syntax.
+//  what's on at the cursor; in the raw pane it inserts Markdown syntax. On a phone-width screen
+//  the same strip sits on top of the keyboard (PadKeyboardBar), with a button to put it away.
 //
 
 import SwiftUI
@@ -12,6 +13,11 @@ struct PadFormattingToolbar: View {
     let controller: PadEditorController
     var onPickPhoto: () -> Void = {}
     var onPickFile: () -> Void = {}
+    /// Shown above the keyboard: bigger buttons for fingers, the keyboard's own background, and
+    /// a button that hides the keyboard.
+    var inKeyboard = false
+
+    private var buttonSize: CGSize { inKeyboard ? CGSize(width: 40, height: 36) : CGSize(width: 34, height: 30) }
 
     private var state: FormatState? { controller.formattedIsActive ? controller.formatState : nil }
 
@@ -21,6 +27,31 @@ struct PadFormattingToolbar: View {
     }
 
     var body: some View {
+        if inKeyboard {
+            HStack(spacing: 0) {
+                strip
+                Divider().frame(height: 24)
+                Button {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 48, height: buttonSize.height)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide Keyboard")
+            }
+            .clipShape(Capsule())
+            .glassEffect(.regular, in: Capsule())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+        } else {
+            strip.background(.bar)
+        }
+    }
+
+    private var strip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 Menu {
@@ -32,7 +63,7 @@ struct PadFormattingToolbar: View {
                 } label: {
                     Label("Heading", systemImage: "textformat.size")
                         .labelStyle(.iconOnly)
-                        .frame(width: 34, height: 30)
+                        .frame(width: buttonSize.width, height: buttonSize.height)
                         .background(highlight(blockIs { if case .heading = $0 { true } else { false } }))
                 }
                 .help("Heading")
@@ -56,7 +87,7 @@ struct PadFormattingToolbar: View {
                 } label: {
                     Image(systemName: "photo")
                         .font(.system(size: 15, weight: .medium))
-                        .frame(width: 34, height: 30)
+                        .frame(width: buttonSize.width, height: buttonSize.height)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -85,10 +116,9 @@ struct PadFormattingToolbar: View {
                          on: state?.folded == true) { controller.toggleFold() }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, inKeyboard ? 6 : 10)
+            .padding(.vertical, inKeyboard ? 4 : 6)
         }
-        .background(.bar)
     }
 
     private var separator: some View {
@@ -103,7 +133,7 @@ struct PadFormattingToolbar: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
-                .frame(width: 34, height: 30)
+                .frame(width: buttonSize.width, height: buttonSize.height)
                 .foregroundStyle(on ? Color.accentColor : Color.primary)
                 .background(highlight(on))
                 .contentShape(Rectangle())
