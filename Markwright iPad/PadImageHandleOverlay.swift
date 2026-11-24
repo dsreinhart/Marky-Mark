@@ -89,7 +89,11 @@ extension PadImageHandleOverlay: UIPointerInteractionDelegate {
                                identifier: "\(corner)" as NSString)
     }
 
+    /// A small rounded square on the pointer. Without a content effect the shape's rect is an
+    /// offset from the pointer, not a place in this view, so it is centred on zero; a rect in view
+    /// coordinates made the pointer jump away from every handle but the top-left one.
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
-        UIPointerStyle(shape: .roundedRect(region.rect.insetBy(dx: 3, dy: 3), radius: 3))
+        let side = Self.reach - 6
+        return UIPointerStyle(shape: .roundedRect(CGRect(x: -side / 2, y: -side / 2, width: side, height: side), radius: 3))
     }
 }
