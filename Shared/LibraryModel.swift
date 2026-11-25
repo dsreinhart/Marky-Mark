@@ -63,8 +63,6 @@ final class LibraryModel {
     private(set) var isScanning = false
     var searchText = ""
     var selectedKeyword: String? = nil
-    /// The group the sidebar last pointed at, so File > New Sheet in Library puts the sheet there too.
-    @ObservationIgnored var insertionFolder: URL? = nil
     /// Counts finished drops, so every row clears its drop outline (a row the drag only passed
     /// over doesn't always hear that the drag left it).
     private(set) var dropCount = 0

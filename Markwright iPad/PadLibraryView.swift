@@ -308,14 +308,15 @@ struct PadLibraryView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
-                createSheet(in: insertionFolder)
+                createSheet(in: nil)
             } label: {
-                Label(newItemTitle("New Sheet"), systemImage: "square.and.pencil")
+                Label("New Sheet", systemImage: "square.and.pencil")
             }
             Menu {
-                Button(newItemTitle("New Sheet"), systemImage: "square.and.pencil") { createSheet(in: insertionFolder) }
-                Button(newItemTitle("New Group") + "\u{2026}", systemImage: "folder.badge.plus") {
-                    newGroupFolder = insertionFolder
+                // Top-level items; long-press a group to create inside it.
+                Button("New Sheet", systemImage: "square.and.pencil") { createSheet(in: nil) }
+                Button("New Group\u{2026}", systemImage: "folder.badge.plus") {
+                    newGroupFolder = nil
                     showNewGroup = true
                 }
                 .disabled(library.folderURL == nil)
@@ -347,20 +348,6 @@ struct PadLibraryView: View {
     }
 
     // MARK: - Actions
-
-    /// Where New Sheet and New Group put things: the group holding the sheet on screen, or the
-    /// top level when that sheet is at the top level or outside the library.
-    private var insertionFolder: URL? {
-        guard let currentURL, library.contains(currentURL), let root = library.root else { return nil }
-        let folder = currentURL.deletingLastPathComponent()
-        return Document.stablePath(folder) == Document.stablePath(root.url) ? nil : folder
-    }
-
-    /// "New Sheet" at the top level, "New Sheet in “Work”" inside a group.
-    private func newItemTitle(_ base: String) -> String {
-        guard let folder = insertionFolder else { return base }
-        return base + " in \u{201C}\(folder.lastPathComponent)\u{201D}"
-    }
 
     /// Moves sheets or groups dragged within the library into `folder`.
     private func drop(_ urls: [URL], into folder: URL) -> Bool {

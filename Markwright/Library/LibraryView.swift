@@ -91,8 +91,9 @@ struct LibraryView: View {
             }
             Spacer()
             Menu {
-                Button(newItemTitle("New Sheet")) { createSheet(in: insertionFolder) }
-                Button(newItemTitle("New Group") + "\u{2026}") { newGroupFolder = insertionFolder; showNewGroup = true }
+                // Top-level items; right-click a group to create inside it.
+                Button("New Sheet") { createSheet() }
+                Button("New Group\u{2026}") { newGroupFolder = nil; showNewGroup = true }
                 Divider()
                 Button("Choose Library Folder…") { library.chooseFolder() }
                 if let url = library.folderURL {
@@ -252,10 +253,7 @@ struct LibraryView: View {
                 .help("Drop here to move to the top level of \u{201C}\(root.name)\u{201D}")
             }
             .listStyle(.sidebar)
-            .onChange(of: selection) { _, url in
-                library.insertionFolder = insertionFolder
-                open(url)
-            }
+            .onChange(of: selection) { _, url in open(url) }
         }
     }
 
@@ -363,21 +361,6 @@ struct LibraryView: View {
         Task { @MainActor in
             selection = currentFileURL
         }
-    }
-
-    /// Where New Sheet and New Group put things: the selected group, or the group holding the
-    /// selected sheet; the top level when nothing in the library is selected.
-    private var insertionFolder: URL? {
-        guard let selection, let root = library.root, let node = LibraryModel.find(selection, in: root),
-              Document.stablePath(node.url) != Document.stablePath(root.url) else { return nil }
-        let folder = node.isFolder ? node.url : node.url.deletingLastPathComponent()
-        return Document.stablePath(folder) == Document.stablePath(root.url) ? nil : folder
-    }
-
-    /// "New Sheet" at the top level, "New Sheet in “Work”" inside a group.
-    private func newItemTitle(_ base: String) -> String {
-        guard let folder = insertionFolder else { return base }
-        return base + " in \u{201C}\(folder.lastPathComponent)\u{201D}"
     }
 
     /// Moves sheets or groups dragged within the library into `folder`.
