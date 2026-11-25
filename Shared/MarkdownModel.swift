@@ -43,6 +43,8 @@ extension NSAttributedString.Key {
     nonisolated static let mmFootnoteRef = NSAttributedString.Key("mm.footnoteRef")
     /// iPad: the Markdown of a table shown read-only in the formatted view, saved back unchanged.
     nonisolated static let mmRawTable = NSAttributedString.Key("mm.rawTable")
+    /// iPad: how much a read-only table's text is scaled down to fit the column (1 = full size).
+    nonisolated static let mmTableScale = NSAttributedString.Key("mm.tableScale")
 }
 
 // MARK: - Blocks

@@ -34,6 +34,19 @@ struct DashboardView: View {
     let onJumpToTag: ((String) -> Void)?
 
     @State private var showGoalEditor = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    /// A phone-width screen turns a popover into a full-height sheet, so the goal editor gets a
+    /// half-height sheet of its own there, with Cancel and Save.
+    private var goalEditorAsSheet: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
     @State private var newKeyword = ""
     private var goalStore = GoalStore.shared
 
@@ -102,11 +115,18 @@ struct DashboardView: View {
                 Spacer()
                 Button(goal == nil ? "Set…" : "Edit…") { showGoalEditor = true }
                     .controlSize(.small)
-                    .popover(isPresented: $showGoalEditor, arrowEdge: .bottom) {
-                        GoalEditor(goal: goal) { updated in
+                    .popover(isPresented: Binding(get: { showGoalEditor && !goalEditorAsSheet }, set: { showGoalEditor = $0 }),
+                             arrowEdge: .bottom) {
+                        GoalEditor(goal: goal, asSheet: false) { updated in
                             goalStore.set(updated, for: goalKey)
                             showGoalEditor = false
-                        }
+                        } onCancel: { showGoalEditor = false }
+                    }
+                    .sheet(isPresented: Binding(get: { showGoalEditor && goalEditorAsSheet }, set: { showGoalEditor = $0 })) {
+                        GoalEditor(goal: goal, asSheet: true) { updated in
+                            goalStore.set(updated, for: goalKey)
+                            showGoalEditor = false
+                        } onCancel: { showGoalEditor = false }
                     }
             }
             if let goal {
@@ -384,19 +404,80 @@ private struct GoalEditor: View {
     @State private var hasDeadline: Bool
     @State private var deadline: Date
     let hadGoal: Bool
+    let asSheet: Bool
     let onSave: (WritingGoal?) -> Void
+    let onCancel: () -> Void
 
-    init(goal: WritingGoal?, onSave: @escaping (WritingGoal?) -> Void) {
+    init(goal: WritingGoal?, asSheet: Bool, onSave: @escaping (WritingGoal?) -> Void, onCancel: @escaping () -> Void) {
         _kind = State(initialValue: goal?.kind ?? .words)
         _mode = State(initialValue: goal?.mode ?? .atLeast)
         _target = State(initialValue: String(goal?.target ?? 1000))
         _hasDeadline = State(initialValue: goal?.deadline != nil)
         _deadline = State(initialValue: goal?.deadline ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())!)
         hadGoal = goal != nil
+        self.asSheet = asSheet
         self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    private var targetValue: Int { Int(target.filter(\.isNumber)) ?? 0 }
+
+    private func save() {
+        guard targetValue > 0 else { return }
+        onSave(WritingGoal(kind: kind, mode: mode, target: targetValue, deadline: hasDeadline ? deadline : nil))
     }
 
     var body: some View {
+        if asSheet { sheetBody } else { popoverBody }
+    }
+
+    /// iPhone: a form in a half-height sheet, Cancel and Save in its bar.
+    private var sheetBody: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Goal", selection: $mode) {
+                        ForEach(WritingGoal.Mode.allCases) { Text($0.label).tag($0) }
+                    }
+                    HStack {
+                        TextField("Target", text: $target)
+                            #if os(iOS)
+                            .keyboardType(.numberPad)
+                            #endif
+                        Picker("", selection: $kind) {
+                            ForEach(WritingGoal.Kind.allCases) { Text($0.label).tag($0) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+                Section {
+                    Toggle("Deadline", isOn: $hasDeadline)
+                    if hasDeadline {
+                        DatePicker("Due", selection: $deadline, displayedComponents: .date)
+                    }
+                }
+                if hadGoal {
+                    Section {
+                        Button("Remove Goal", role: .destructive) { onSave(nil) }
+                    }
+                }
+            }
+            .navigationTitle("Writing Goal")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save).disabled(targetValue <= 0)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var popoverBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Writing Goal").font(.headline)
             HStack {
@@ -422,12 +503,8 @@ private struct GoalEditor: View {
                     Button("Remove Goal", role: .destructive) { onSave(nil) }
                 }
                 Spacer()
-                Button("Save") {
-                    let value = Int(target.filter(\.isNumber)) ?? 0
-                    guard value > 0 else { return }
-                    onSave(WritingGoal(kind: kind, mode: mode, target: value, deadline: hasDeadline ? deadline : nil))
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Save", action: save)
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(14)

@@ -304,12 +304,67 @@ final class StyleEngine {
         min(max(style.maxWidth, 400), 720, tableTextWidth ?? .infinity) - 16
     }
 
-    /// A table shown in tab-separated columns, one every so many points.
-    func tableParagraphStyle(columns: Int, width: CGFloat) -> NSParagraphStyle {
+    /// Column stops for a read-only table: each column as wide as its widest cell, with the room
+    /// left over shared out in proportion, so short columns stay short and long ones get the
+    /// space. When the cells don't fit at full size, the table's text is scaled down (to no less
+    /// than `tableMinimumScale`) so each row stays on one line. `naturalWidths` are measured at
+    /// full size.
+    func tableLayout(naturalWidths: [CGFloat], width: CGFloat) -> (style: NSParagraphStyle, scale: CGFloat) {
+        let columns = TableColumns.layout(naturalWidths: naturalWidths, width: width)
+        return (tableParagraphStyle(stops: columns.stops.map { NSTextTab(textAlignment: .left, location: $0) }), columns.scale)
+    }
+
+    /// Lays out the read-only table in `range` of `text` (rows split at line separators, cells
+    /// at tabs) for the current table width: sets its column stops and scales its fonts.
+    /// Attribute-only, so it can run on a live text storage. Returns whether anything changed.
+    @discardableResult
+    func applyTableLayout(to text: NSMutableAttributedString, range: NSRange) -> Bool {
+        guard range.length > 0 else { return false }
+        let ns = text.string as NSString
+        let oldScale = (text.attribute(.mmTableScale, at: range.location, effectiveRange: nil) as? CGFloat) ?? 1
+        // Widest cell per column, at full size.
+        var widths: [CGFloat] = []
+        var rowStart = range.location
+        let end = NSMaxRange(range)
+        var index = range.location
+        while index <= end {
+            if index == end || ns.character(at: index) == MarkdownSyntax.lineSeparatorUTF16 {
+                var cellStart = rowStart, column = 0, i = rowStart
+                while i <= index {
+                    if i == index || ns.character(at: i) == 9 {
+                        let cell = NSRange(location: cellStart, length: i - cellStart)
+                        let width = cell.length == 0 ? 0 : ceil(text.attributedSubstring(from: cell).size().width / oldScale)
+                        if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
+                        column += 1
+                        cellStart = i + 1
+                    }
+                    i += 1
+                }
+                rowStart = index + 1
+            }
+            index += 1
+        }
+        let layout = tableLayout(naturalWidths: widths, width: tableWidth)
+        let oldStyle = text.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+        let sameStops = oldStyle?.tabStops.map(\.location) == layout.style.tabStops.map(\.location)
+        guard !sameStops || abs(layout.scale - oldScale) > 0.005 else { return false }
+        text.addAttribute(.paragraphStyle, value: layout.style, range: range)
+        if abs(layout.scale - oldScale) > 0.005 {
+            let factor = layout.scale / oldScale
+            text.enumerateAttribute(.font, in: range) { value, run, _ in
+                guard let font = value as? PlatformFont else { return }
+                text.addAttribute(.font, value: font.withSize(font.pointSize * factor), range: run)
+            }
+            text.addAttribute(.mmTableScale, value: layout.scale, range: range)
+        }
+        return true
+    }
+
+    /// The fixed part of a table's paragraph style, with the given column stops.
+    func tableParagraphStyle(stops: [NSTextTab]) -> NSParagraphStyle {
         let ps = NSMutableParagraphStyle()
-        let column = max(floor(width / CGFloat(max(columns, 1))), 60)
-        ps.tabStops = (1..<max(columns, 1)).map { NSTextTab(textAlignment: .left, location: CGFloat($0) * column + 8) }
-        ps.defaultTabInterval = column
+        ps.tabStops = stops
+        ps.defaultTabInterval = 60
         ps.firstLineHeadIndent = 8
         ps.headIndent = 8
         ps.lineSpacing = 6

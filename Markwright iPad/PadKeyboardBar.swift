@@ -22,6 +22,10 @@ final class PadKeyboardBar {
     init(toolbar: PadFormattingToolbar) {
         host = UIHostingController(rootView: toolbar)
         host.sizingOptions = []
+        // The bar sits just above the keyboard, so the screen's bottom safe area doesn't apply to
+        // it. Left on, SwiftUI shifted the capsule up out of the bar's frame, over the line being
+        // typed (the text view stops at the frame's top edge).
+        host.safeAreaRegions = []
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
         view = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: Self.height))

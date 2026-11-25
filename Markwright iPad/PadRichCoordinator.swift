@@ -171,18 +171,16 @@ final class PadRichCoordinator: NSObject {
         guard let storage, textWidth > 50 else { return }
         if let current = engine.tableTextWidth, abs(current - textWidth) < 1 { return }
         engine.tableTextWidth = textWidth
-        var changes: [(NSRange, NSParagraphStyle)] = []
+        var tables: [NSRange] = []
         storage.enumerateAttribute(.mmRawTable, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            guard value != nil,
-                  let old = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return }
-            let new = engine.tableParagraphStyle(columns: old.tabStops.count + 1, width: engine.tableWidth)
-            if new.tabStops != old.tabStops { changes.append((range, new)) }
+            if value != nil { tables.append(range) }
         }
-        guard !changes.isEmpty else { return }
+        guard !tables.isEmpty else { return }
         let wasLoading = isLoading
         isLoading = true
         storage.beginEditing()
-        for (range, style) in changes { storage.addAttribute(.paragraphStyle, value: style, range: range) }
+        // Attribute-only: column stops and the table's text size follow the new width.
+        for range in tables { engine.applyTableLayout(to: storage, range: range) }
         storage.endEditing()
         isLoading = wasLoading
     }

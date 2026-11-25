@@ -192,3 +192,33 @@ struct ImageFolderLinksTests {
         #expect(ImageFolderLinks.uniqueFileName("a.jpg") { taken.contains($0) } == "a-3.jpg")
     }
 }
+
+@Suite("Table columns (iPad and iPhone)")
+struct TableColumnTests {
+    @Test func shortColumnsStayShortAndTheRestIsShared() {
+        // Day | Drive | Stop for the night, on a phone-width column.
+        let layout = TableColumns.layout(naturalWidths: [30, 160, 130], width: 370)
+        #expect(layout.scale == 1)
+        #expect(layout.stops.count == 2)
+        #expect(layout.stops[0] < 70, "the narrow first column isn't given a third of the width")
+        // Every column starts after the previous one's widest cell.
+        #expect(layout.stops[0] >= TableColumns.leading + 30 + TableColumns.gap)
+        #expect(layout.stops[1] >= layout.stops[0] + 160 + TableColumns.gap)
+    }
+
+    @Test func tooWideScalesDownToFitButNotTooFar() {
+        let fits = TableColumns.layout(naturalWidths: [120, 80, 70, 90], width: 340)
+        #expect(fits.scale < 1)
+        let used = (120 + 80 + 70 + 90) * fits.scale + TableColumns.gap * 4
+        #expect(used <= 340.5, "scaled cells and gaps fit the width")
+        let huge = TableColumns.layout(naturalWidths: [400, 400, 400], width: 340)
+        #expect(huge.scale == TableColumns.minimumScale, "text never shrinks below the minimum")
+    }
+
+    @Test func roomyTablesKeepFullSize() {
+        let layout = TableColumns.layout(naturalWidths: [40, 60], width: 700)
+        #expect(layout.scale == 1)
+        #expect(layout.stops.first ?? 0 > 40 + TableColumns.gap, "spare room is shared out, not left at the end")
+    }
+}
+

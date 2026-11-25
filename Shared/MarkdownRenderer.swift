@@ -255,7 +255,8 @@ struct MarkdownRenderer {
         let source = markdown ?? ([line(headers), "|" + String(repeating: " --- |", count: columns)] + rows.map(line))
             .joined(separator: "\n")
         let block = BlockInfo(.tableCell)
-        let ps = engine.tableParagraphStyle(columns: columns, width: engine.tableWidth)
+        // Placeholder stops; applyTableLayout sets the real ones once the cells can be measured.
+        var ps = engine.tableParagraphStyle(stops: [])
         let content = NSMutableAttributedString()
         for (rowIndex, row) in allRows.enumerated() {
             if rowIndex > 0 {
@@ -272,6 +273,10 @@ struct MarkdownRenderer {
             }
         }
         content.addAttribute(.mmRawTable, value: source, range: NSRange(location: 0, length: content.length))
+        engine.applyTableLayout(to: content, range: NSRange(location: 0, length: content.length))
+        if content.length > 0, let laidOut = content.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+            ps = laidOut
+        }
         return [Paragraph(content: content, block: block, paragraphStyle: ps)]
     }
     #endif
